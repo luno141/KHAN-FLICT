@@ -1,4 +1,10 @@
 import { BrowserProvider, ethers } from "ethers";
+import {
+  getMonadExplorerBaseUrl,
+  getMonadExplorerAddressUrl,
+  getMonadExplorerTxUrl,
+  hasConfiguredMonadExplorerUrl,
+} from "@/src/lib/monad-explorer";
 
 export type WalletState = {
   address: string | null;
@@ -61,6 +67,18 @@ export function subscribeToWalletEvents(listener: () => void) {
 }
 
 export async function connectWallet(): Promise<WalletState> {
+  const ethereum = getInjectedEthereum();
+
+  try {
+    await ethereum.request?.({
+      method: "wallet_requestPermissions",
+      params: [{ eth_accounts: {} }],
+    });
+  } catch {
+    // Fall back to the standard account request for wallets that do not support
+    // the permissions flow.
+  }
+
   const provider = getInjectedBrowserProvider();
   await provider.send("eth_requestAccounts", []);
 
@@ -104,26 +122,11 @@ export function shortenAddress(address: string | null) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
-const monadExplorerUrl =
-  process.env.NEXT_PUBLIC_MONAD_EXPLORER_URL ?? "";
-
-export function getMonadExplorerTxUrl(txHash: string) {
-  if (!monadExplorerUrl) {
-    return "";
-  }
-  return `${monadExplorerUrl.replace(/\/+$/, "")}/tx/${txHash}`;
-}
-
-export function getMonadExplorerAddressUrl(address: string) {
-  if (!monadExplorerUrl) {
-    return "";
-  }
-  return `${monadExplorerUrl.replace(/\/+$/, "")}/address/${address}`;
-}
-
 export function hasMonadExplorerUrl() {
-  return monadExplorerUrl.length > 0;
+  return hasConfiguredMonadExplorerUrl();
 }
+
+export { getMonadExplorerTxUrl, getMonadExplorerAddressUrl };
 
 const monadRpcUrl =
   process.env.NEXT_PUBLIC_MONAD_RPC_URL ?? "https://testnet-rpc.monad.xyz/";
@@ -144,8 +147,8 @@ export async function addMonadToWallet() {
           symbol: monadCurrencySymbol,
           decimals: 18,
         },
-        ...(monadExplorerUrl
-          ? { blockExplorerUrls: [monadExplorerUrl] }
+        ...(hasConfiguredMonadExplorerUrl()
+          ? { blockExplorerUrls: [getMonadExplorerBaseUrl()] }
           : {}),
       },
     ],

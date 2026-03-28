@@ -44,6 +44,12 @@ export type EncounterLayout = {
   enemies: Array<{ x: number; y: number; kind: EnemyType }>;
 };
 
+export type AuthoredDungeon = {
+  metrics: MapMetrics;
+  walkableGrid: boolean[][];
+  encounterLayout: EncounterLayout;
+};
+
 type PlacementTarget = {
   targetX: number;
   targetY: number;
@@ -108,6 +114,11 @@ const MAP_BOUND_LAYERS = new Set([
   "details3",
 ]);
 
+const MIDGROUND_LAYERS = new Set([
+  "Objects_under_elevated_space",
+  "details3",
+]);
+
 export const TILESET_RANGES = [
   { firstGid: 1, lastGid: 2262, textureKey: "tiles-ground" },
   { firstGid: 2263, lastGid: 5148, textureKey: "tiles-water-v2" },
@@ -123,6 +134,18 @@ export const TILESET_RANGES = [
 
 export function isOverlayLayer(layerName: string) {
   return OVERLAY_LAYERS.has(layerName);
+}
+
+export function getLayerRenderBand(layerName: string) {
+  if (MIDGROUND_LAYERS.has(layerName)) {
+    return "midground" as const;
+  }
+
+  if (OVERLAY_LAYERS.has(layerName)) {
+    return "foreground" as const;
+  }
+
+  return "background" as const;
 }
 
 export function getTilesetForGid(gid: number) {
@@ -572,5 +595,62 @@ export function resolveEncounterLayout(
       kind: entry.kind,
       ...toWorldPoint(entry.tile, metrics),
     })),
+  };
+}
+
+export function buildSafeDungeon(sceneWidth: number, sceneHeight: number): AuthoredDungeon {
+  const widthTiles = 38;
+  const heightTiles = 25;
+  const metrics: MapMetrics = {
+    minX: 0,
+    minY: 0,
+    maxX: widthTiles - 1,
+    maxY: heightTiles - 1,
+    widthTiles,
+    heightTiles,
+    widthPx: widthTiles * MAP_TILE_SIZE,
+    heightPx: heightTiles * MAP_TILE_SIZE,
+    originX: Math.floor((sceneWidth - widthTiles * MAP_TILE_SIZE) / 2),
+    originY: Math.max(18, Math.floor((sceneHeight - heightTiles * MAP_TILE_SIZE) / 2)),
+  };
+
+  const walkableGrid = Array.from({ length: heightTiles }, () =>
+    Array.from({ length: widthTiles }, () => false),
+  );
+
+  const carveRoom = (fromX: number, fromY: number, toX: number, toY: number) => {
+    for (let y = fromY; y <= toY; y += 1) {
+      for (let x = fromX; x <= toX; x += 1) {
+        if (y >= 0 && x >= 0 && y < heightTiles && x < widthTiles) {
+          walkableGrid[y][x] = true;
+        }
+      }
+    }
+  };
+
+  carveRoom(2, 16, 10, 22);
+  carveRoom(9, 8, 12, 20);
+  carveRoom(3, 3, 15, 10);
+  carveRoom(13, 10, 23, 17);
+  carveRoom(22, 6, 25, 18);
+  carveRoom(24, 2, 35, 9);
+  carveRoom(26, 16, 35, 22);
+  carveRoom(18, 17, 27, 20);
+  carveRoom(11, 12, 16, 14);
+
+  const encounterLayout: EncounterLayout = {
+    player: toWorldPoint({ x: 4, y: 19 }, metrics),
+    portal: toWorldPoint({ x: 33, y: 4 }, metrics),
+    enemies: [
+      { kind: "slime", ...toWorldPoint({ x: 8, y: 7 }, metrics) },
+      { kind: "skeleton", ...toWorldPoint({ x: 29, y: 7 }, metrics) },
+      { kind: "wisp", ...toWorldPoint({ x: 30, y: 18 }, metrics) },
+    ],
+  };
+
+  return {
+    metrics,
+    walkableGrid,
+    encounterLayout,
   };
 }

@@ -5,6 +5,7 @@ import type {
   ItemTemplate,
   PvpOpponent,
 } from "@/src/game/types";
+import { ITEM_ICON_ASSETS } from "@/src/game/items";
 
 export const GAME_TITLE = "KHAN-FLICT";
 export const DUNGEON_NAME = "Salman's Gym-Powered Dungeon";
@@ -123,7 +124,7 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
     type: "charm",
     slot: "charm",
     description: "A prop that somehow survived editing. Heavy, useless, emotionally committed.",
-    icon: "🪨",
+    icon: ITEM_ICON_ASSETS.rock,
     baseValue: 1,
     premium: false,
     baseBonuses: { defense: 1, speed: -1, luck: -1 },
@@ -135,7 +136,7 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
     type: "weapon",
     slot: "weapon",
     description: "Looks dangerous on camera, less so in reality.",
-    icon: "🗡️",
+    icon: ITEM_ICON_ASSETS["wooden-sword"],
     baseValue: 3,
     premium: false,
     baseBonuses: { attack: 1 },
@@ -147,7 +148,7 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
     type: "weapon",
     slot: "weapon",
     description: "Built for clean openings, perfect parries, and dramatic close-ups.",
-    icon: "⚔",
+    icon: ITEM_ICON_ASSETS["vanguard-blade"],
     baseValue: 18,
     premium: false,
     baseBonuses: { attack: 4, defense: 1 },
@@ -183,7 +184,7 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
     type: "armor",
     slot: "armor",
     description: "The coat alone adds 20 percent more hero framing.",
-    icon: "🛡",
+    icon: ITEM_ICON_ASSETS.duskmail,
     baseValue: 20,
     premium: false,
     baseBonuses: { defense: 4, health: 10 },
@@ -195,7 +196,7 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
     type: "charm",
     slot: "charm",
     description: "Boosts aura, attitude, and the illusion that charisma is a combat stat.",
-    icon: "🔥",
+    icon: ITEM_ICON_ASSETS["ember-charm"],
     baseValue: 16,
     premium: false,
     baseBonuses: { speed: 1, luck: 2, critChance: 0.02 },
@@ -206,7 +207,7 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
     name: "Masala Energy Flask",
     type: "consumable",
     description: "Restores health, swagger, and the ability to keep talking mid-fight.",
-    icon: "🧪",
+    icon: ITEM_ICON_ASSETS.moonbrew,
     baseValue: 14,
     premium: false,
     baseBonuses: {},
@@ -219,7 +220,7 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
     type: "artifact",
     slot: "artifact",
     description: "A premium artifact tied to the heart of the dungeon and absolutely too dramatic to ignore.",
-    icon: "🜂",
+    icon: ITEM_ICON_ASSETS["starforged-idol"],
     baseValue: 80,
     premium: true,
     baseBonuses: { attack: 3, defense: 2, luck: 4 },
@@ -238,7 +239,7 @@ export const ENEMY_THEME: Record<
   { name: string; color: number; health: number; attack: number; defense: number; speed: number }
 > = {
   slime: {
-    name: "Rajpal Gremlin",
+    name: "Chota Pandit",
     color: 0x4ade80,
     health: 34,
     attack: 7,
@@ -246,7 +247,7 @@ export const ENEMY_THEME: Record<
     speed: 3,
   },
   skeleton: {
-    name: "Bhai Bouncer",
+    name: "Salman Khan",
     color: 0xe5e7eb,
     health: 46,
     attack: 10,

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { FallbackDungeon } from "@/src/components/fallback-dungeon";
 import { DUNGEON_NAME, ENEMY_THEME } from "@/src/game/content";
 import {
   calculateDamage,
@@ -9,19 +10,17 @@ import {
   rarityColor,
 } from "@/src/game/helpers";
 import {
-  buildMapMetrics,
-  buildWalkableGrid,
-  getTilesetForGid,
-  isOverlayLayer,
+  buildSafeDungeon,
   MAP_TILE_SIZE,
   mergeCollisionGrid,
-  parseMapLayers,
-  resolveEncounterLayout,
-  TILESET_RANGES,
-  type EncounterLayout,
   type MapMetrics,
-  type TileLayer,
 } from "@/src/game/dungeon/map";
+import {
+  getActorDepth,
+  getDirectionFromVector,
+  getShadowDepth,
+  type Direction8,
+} from "@/src/game/dungeon/runtime";
 import type {
   Archetype,
   CombatLogEntry,
@@ -50,6 +49,7 @@ type DungeonEnemy = {
   id: string;
   kind: EnemyType;
   packKey: string;
+  renderMode: "sheet" | "directional-static" | "directional-walk";
   sprite: Phaser.Physics.Arcade.Sprite;
   shadow: Phaser.GameObjects.Ellipse;
   label: Phaser.GameObjects.Text;
@@ -62,6 +62,7 @@ type DungeonEnemy = {
   nextSwingAt: number;
   animLockUntil: number;
   alive: boolean;
+  facing: Direction8;
 };
 
 type CompanionSlot = "left" | "right";
@@ -91,6 +92,40 @@ const ENEMY_PACK: Record<EnemyType, string> = {
   wisp: "red-slime",
 };
 
+const DIRECTIONAL_ENEMY_PACK: Partial<Record<
+  EnemyType,
+  {
+    key: string;
+    mode: "directional-static" | "directional-walk";
+    scale: number;
+    label: string;
+  }
+>> = {
+  slime: {
+    key: "chota-pandit",
+    mode: "directional-static",
+    scale: 0.92,
+    label: "Chota Pandit",
+  },
+  skeleton: {
+    key: "salman",
+    mode: "directional-walk",
+    scale: 0.94,
+    label: "Salman Khan",
+  },
+};
+
+const DIRECTION_ORDER: Direction8[] = [
+  "north",
+  "north-east",
+  "east",
+  "south-east",
+  "south",
+  "south-west",
+  "west",
+  "north-west",
+];
+
 const COMPANION_CAST = [
   {
     id: "abhishek-bachchan",
@@ -115,6 +150,13 @@ const PLAYER_SHEET_CONFIG = { frameWidth: 96, frameHeight: 96 };
 const ENEMY_SHEET_CONFIG = { frameWidth: 128, frameHeight: 128 };
 
 export function PhaserDungeon(props: PhaserDungeonProps) {
+  return <FallbackDungeon {...props} />;
+}
+
+function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
+  const [useSafeMode, setUseSafeMode] = useState(false);
+  const [sceneBootState, setSceneBootState] = useState<"booting" | "ready" | "error">("booting");
+  const [sceneError, setSceneError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<{
     destroy: (removeCanvas: boolean, noReturn?: boolean) => void;
@@ -131,24 +173,37 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
     }
 
     let disposed = false;
+    let bootTimer: ReturnType<typeof setTimeout> | null = null;
+    setSceneBootState("booting");
+    setSceneError(null);
+    setUseSafeMode(false);
 
-    void import("phaser").then((phaserModule) => {
-      if (disposed || !containerRef.current) {
-        return;
+    bootTimer = setTimeout(() => {
+      if (!disposed) {
+        setSceneError("Primary scene boot timed out. Switching to safe dungeon mode.");
+        setSceneBootState("error");
+        setUseSafeMode(true);
       }
+    }, 1800);
 
-      const Phaser = phaserModule.default;
-      const palette = {
-        bg: 0x040814,
-        floor: 0x0c1324,
-        frame: 0x223250,
-        portal: 0xfacc15,
-        portalGlow: 0xfde68a,
-        drop: 0xf472b6,
-        shadow: 0x030712,
-      };
+    void import("phaser")
+      .then((phaserModule) => {
+        if (disposed || !containerRef.current) {
+          return;
+        }
 
-      class DungeonScene extends Phaser.Scene {
+        const Phaser = phaserModule.default;
+        const palette = {
+          bg: 0x040814,
+          floor: 0x0c1324,
+          frame: 0x223250,
+          portal: 0xfacc15,
+          portalGlow: 0xfde68a,
+          drop: 0xf472b6,
+          shadow: 0x030712,
+        };
+
+        class DungeonScene extends Phaser.Scene {
         private player!: Phaser.Physics.Arcade.Sprite;
         private playerShadow!: Phaser.GameObjects.Ellipse;
         private squadFollowers: DungeonCompanion[] = [];
@@ -180,6 +235,10 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
 
         preload() {
           this.load.text("relic-rush-tmx", "/assets/relic-rush/tiles/Undead_land.tmx");
+          this.load.image(
+            "khan-flict-scene-backdrop",
+            "/assets/khan-flict/scenes/dungeon-backdrop.png",
+          );
           this.load.spritesheet(
             "tiles-ground",
             "/assets/relic-rush/tiles/Ground_rocks.png",
@@ -281,144 +340,184 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
               ENEMY_SHEET_CONFIG,
             );
           }
+
+          for (const direction of DIRECTION_ORDER) {
+            this.load.image(
+              `salman-idle-${direction}`,
+              `/assets/khan-flict/characters/salman/rotations/${direction}.png`,
+            );
+            this.load.image(
+              `chota-pandit-idle-${direction}`,
+              `/assets/khan-flict/characters/chota-pandit/rotations/${direction}.png`,
+            );
+
+            for (let frame = 0; frame < 4; frame += 1) {
+              this.load.image(
+                `salman-walk-${direction}-${frame}`,
+                `/assets/khan-flict/characters/salman/animations/walking-4-frames/${direction}/frame_${frame
+                  .toString()
+                  .padStart(3, "0")}.png`,
+              );
+            }
+          }
         }
 
         create() {
-          this.cameras.main.setBackgroundColor(palette.bg);
-          this.buildTextures(palette);
-          this.createAnimations();
-          const mapLayers = parseMapLayers(
-            this.cache.text.get("relic-rush-tmx") as string | undefined,
-          );
-          this.mapMetrics = buildMapMetrics(mapLayers, SCENE_WIDTH, SCENE_HEIGHT);
-          this.walkableGrid = buildWalkableGrid(mapLayers, this.mapMetrics);
-          this.physics.world.setBounds(
-            this.mapMetrics.originX,
-            this.mapMetrics.originY,
-            this.mapMetrics.widthPx,
-            this.mapMetrics.heightPx,
-          );
-          this.buildArenaFrame(palette, this.mapMetrics);
-          this.renderDungeonMap(mapLayers, this.mapMetrics);
-          this.blockers = this.buildCollisionBodies(this.walkableGrid, this.mapMetrics);
-          const encounterLayout = resolveEncounterLayout(
-            this.walkableGrid,
-            this.mapMetrics,
-          );
+          try {
+            this.cameras.main.setBackgroundColor(palette.bg);
+            this.buildTextures(palette);
+            this.createAnimations();
+            const authoredDungeon = buildSafeDungeon(SCENE_WIDTH, SCENE_HEIGHT);
+            this.mapMetrics = authoredDungeon.metrics;
+            this.walkableGrid = authoredDungeon.walkableGrid;
+            this.physics.world.setBounds(
+              this.mapMetrics.originX,
+              this.mapMetrics.originY,
+              this.mapMetrics.widthPx,
+              this.mapMetrics.heightPx,
+            );
+            this.renderSceneBackdrop();
+            this.buildArenaFrame(palette, this.mapMetrics);
+            this.renderSafeDungeonMap(this.walkableGrid, this.mapMetrics);
+            this.blockers = this.buildCollisionBodies(this.walkableGrid, this.mapMetrics);
+            const encounterLayout = authoredDungeon.encounterLayout;
 
-          const playerPack = PLAYER_PACK[callbacksRef.current.archetype];
-          this.playerShadow = this.add
-            .ellipse(0, 0, 28, 12, palette.shadow, 0.42)
-            .setDepth(17);
-          this.player = this.physics.add.sprite(
-            encounterLayout.player.x,
-            encounterLayout.player.y,
-            `${playerPack}-idle`,
-          );
-          this.player
-            .setCollideWorldBounds(true)
-            .setDepth(20)
-            .setScale(0.58);
-          const playerBody = this.getDynamicBody(this.player);
-          playerBody?.setSize(14, 16);
-          playerBody?.setOffset(41, 74);
-          playerBody?.setDrag(1100, 1100);
-          playerBody?.setMaxVelocity(
-            74 + callbacksRef.current.stats.speed * 3,
-            74 + callbacksRef.current.stats.speed * 3,
-          );
-          this.player.anims.play(`${playerPack}-idle`, true);
-          this.lastHeading.set(1, 0);
-          this.physics.add.collider(this.player, this.blockers);
-          this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
-          this.cameras.main.setZoom(1.02);
-          this.squadFollowers = this.spawnCompanions(
-            encounterLayout.player.x,
-            encounterLayout.player.y,
-          );
+            const playerPack = PLAYER_PACK[callbacksRef.current.archetype];
+            this.playerShadow = this.add
+              .ellipse(0, 0, 28, 12, palette.shadow, 0.42)
+              .setDepth(17);
+            this.player = this.physics.add.sprite(
+              encounterLayout.player.x,
+              encounterLayout.player.y,
+              `${playerPack}-idle`,
+            );
+            this.player
+              .setCollideWorldBounds(true)
+              .setDepth(20)
+              .setScale(0.58);
+            const playerBody = this.getDynamicBody(this.player);
+            playerBody?.setSize(14, 16);
+            playerBody?.setOffset(41, 74);
+            playerBody?.setDrag(1400, 1400);
+            playerBody?.setMaxVelocity(
+              70 + callbacksRef.current.stats.speed * 2.5,
+              70 + callbacksRef.current.stats.speed * 2.5,
+            );
+            this.player.anims.play(`${playerPack}-idle`, true);
+            this.lastHeading.set(1, 0);
+            this.physics.add.collider(this.player, this.blockers);
+            this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+            this.cameras.main.setZoom(1.02);
+            this.squadFollowers = this.spawnCompanions(
+              encounterLayout.player.x,
+              encounterLayout.player.y,
+            );
 
-          // Locked gate frame — visible from the start but dimmed
-          this.portal = this.physics.add.sprite(
-            encounterLayout.portal.x,
-            encounterLayout.portal.y,
-            "relic-portal-locked",
-          );
-          this.portal.setDepth(15).setAlpha(0.7);
-          if (this.getDynamicBody(this.portal)) {
-            this.getDynamicBody(this.portal)!.enable = false;
-          }
+            // Locked gate frame — visible from the start but dimmed
+            this.portal = this.physics.add.sprite(
+              encounterLayout.portal.x,
+              encounterLayout.portal.y,
+              "relic-portal-locked",
+            );
+            this.portal.setDepth(getActorDepth(encounterLayout.portal.y, 14)).setAlpha(0.7);
+            if (this.getDynamicBody(this.portal)) {
+              this.getDynamicBody(this.portal)!.enable = false;
+            }
 
           // "EXIT" label above the portal
-          const portalLabel = this.add.text(
-            encounterLayout.portal.x,
-            encounterLayout.portal.y - 40,
-            "🔒 EXIT",
-            {
-              color: "#94a3b8",
-              fontFamily: "var(--font-mono)",
-              fontSize: "10px",
-            },
-          );
-          portalLabel.setOrigin(0.5).setDepth(22);
-          // Store the label so we can update it when unlocked
-          this.portal.setData("label", portalLabel);
-
-          this.enemyBodies = this.spawnEnemies(encounterLayout.enemies);
-          this.enemyBodies.forEach((enemy) => {
-            const enemyBody = this.getDynamicBody(enemy.sprite);
-            enemyBody?.setSize(18, 16);
-            enemyBody?.setOffset(55, 88);
-            enemyBody?.setMaxVelocity(
-              44 + enemy.speed * 4,
-              44 + enemy.speed * 4,
+            const portalLabel = this.add.text(
+              encounterLayout.portal.x,
+              encounterLayout.portal.y - 40,
+              "🔒 EXIT",
+              {
+                color: "#94a3b8",
+                fontFamily: "var(--font-mono)",
+                fontSize: "10px",
+              },
             );
-            this.physics.add.collider(enemy.sprite, this.blockers);
-            this.physics.add.collider(enemy.sprite, this.player);
-          });
+            portalLabel.setOrigin(0.5).setDepth(getActorDepth(encounterLayout.portal.y, 21));
+            this.portal.setData("label", portalLabel);
 
-          this.lootGroup = this.physics.add.group({
-            immovable: true,
-            allowGravity: false,
-          });
+            this.enemyBodies = this.spawnEnemies(encounterLayout.enemies);
+            this.enemyBodies.forEach((enemy) => {
+              const enemyBody = this.getDynamicBody(enemy.sprite);
+              if (enemy.renderMode === "sheet") {
+                enemyBody?.setSize(18, 16);
+                enemyBody?.setOffset(55, 88);
+              } else {
+                enemyBody?.setSize(18, 16);
+                enemyBody?.setOffset(15, 22);
+              }
+              enemyBody?.setMaxVelocity(
+                38 + enemy.speed * 3.5,
+                38 + enemy.speed * 3.5,
+              );
+              this.physics.add.collider(enemy.sprite, this.blockers);
+              this.physics.add.collider(enemy.sprite, this.player);
+            });
 
-          this.physics.add.overlap(this.player, this.lootGroup, (_, drop) => {
-            const lootDrop = drop as Phaser.Physics.Arcade.Sprite;
-            const loot = lootDrop.getData("loot") as InventoryItem | null;
+            this.lootGroup = this.physics.add.group({
+              immovable: true,
+              allowGravity: false,
+            });
 
-            if (!loot) {
+            this.physics.add.overlap(this.player, this.lootGroup, (_, drop) => {
+              const lootDrop = drop as Phaser.Physics.Arcade.Sprite;
+              const loot = lootDrop.getData("loot") as InventoryItem | null;
+
+              if (!loot) {
+                lootDrop.destroy();
+                return;
+              }
+
+              callbacksRef.current.onLootCollected(loot);
+              callbacksRef.current.onLog(createLog(`Looted ${loot.name}.`, "loot"));
+              this.lootCollected += 1;
               lootDrop.destroy();
-              return;
+            });
+
+            this.physics.add.overlap(this.player, this.portal, () => {
+              if (!this.runResolved && this.portal.visible) {
+                this.finishRun("victory", "You breached the relic vault.");
+              }
+            });
+
+            const keyboard = this.input.keyboard;
+            if (!keyboard) {
+              throw new Error("Keyboard input could not be initialised.");
             }
 
-            callbacksRef.current.onLootCollected(loot);
-            callbacksRef.current.onLog(createLog(`Looted ${loot.name}.`, "loot"));
-            this.lootCollected += 1;
-            lootDrop.destroy();
-          });
+            keyboard.addCapture([
+              Phaser.Input.Keyboard.KeyCodes.W,
+              Phaser.Input.Keyboard.KeyCodes.A,
+              Phaser.Input.Keyboard.KeyCodes.S,
+              Phaser.Input.Keyboard.KeyCodes.D,
+              Phaser.Input.Keyboard.KeyCodes.SPACE,
+            ]);
+            this.cursors = keyboard.addKeys({
+              left: Phaser.Input.Keyboard.KeyCodes.A,
+              right: Phaser.Input.Keyboard.KeyCodes.D,
+              up: Phaser.Input.Keyboard.KeyCodes.W,
+              down: Phaser.Input.Keyboard.KeyCodes.S,
+            }) as typeof this.cursors;
+            this.attackKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
-          this.physics.add.overlap(this.player, this.portal, () => {
-            if (!this.runResolved && this.portal.visible) {
-              this.finishRun("victory", "You breached the relic vault.");
+            callbacksRef.current.onHealthChange(this.currentHealth);
+            callbacksRef.current.onLog(
+              createLog("Expedition started. Press space to attack.", "neutral"),
+            );
+            if (bootTimer) {
+              clearTimeout(bootTimer);
             }
-          });
-
-          const keyboard = this.input.keyboard;
-          if (!keyboard) {
-            return;
+            setSceneBootState("ready");
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : "Dungeon scene failed to start.";
+            setSceneError(message);
+            setSceneBootState("error");
+            setUseSafeMode(true);
+            callbacksRef.current.onLog(createLog(message, "bad"));
           }
-
-          this.cursors = keyboard.addKeys({
-            left: Phaser.Input.Keyboard.KeyCodes.A,
-            right: Phaser.Input.Keyboard.KeyCodes.D,
-            up: Phaser.Input.Keyboard.KeyCodes.W,
-            down: Phaser.Input.Keyboard.KeyCodes.S,
-          }) as typeof this.cursors;
-          this.attackKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
-
-          callbacksRef.current.onHealthChange(this.currentHealth);
-          callbacksRef.current.onLog(
-            createLog("Expedition started. Press space to attack.", "neutral"),
-          );
         }
 
         update(time: number) {
@@ -459,6 +558,8 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
           if (velocity.x !== 0) {
             this.player.setFlipX(velocity.x < 0);
           }
+
+          this.player.setDepth(getActorDepth(this.player.y, 18));
 
           if (time >= this.playerAnimLockUntil) {
             const playerPack = PLAYER_PACK[callbacksRef.current.archetype];
@@ -502,12 +603,24 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
               enemy.sprite.setFlipX(enemyBody.velocity.x < 0);
             }
 
+            if (enemy.renderMode !== "sheet") {
+              enemy.facing = getDirectionFromVector(
+                enemyBody?.velocity.x ?? 0,
+                enemyBody?.velocity.y ?? 0,
+                enemy.facing,
+              );
+              this.updateDirectionalEnemyAppearance(enemy, enemyBody?.speed ?? 0);
+            }
+
+            enemy.sprite.setDepth(getActorDepth(enemy.sprite.y, 17));
+
             if (time >= enemy.animLockUntil) {
-              if (enemyBody && enemyBody.speed > 6) {
+              if (enemy.renderMode === "sheet" && enemyBody && enemyBody.speed > 6) {
                 if (enemy.sprite.anims.currentAnim?.key !== `${enemy.packKey}-run`) {
                   enemy.sprite.anims.play(`${enemy.packKey}-run`, true);
                 }
               } else if (
+                enemy.renderMode === "sheet" &&
                 enemy.sprite.anims.currentAnim?.key !== `${enemy.packKey}-idle`
               ) {
                 enemy.sprite.anims.play(`${enemy.packKey}-idle`, true);
@@ -582,6 +695,19 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
           hint.setDepth(30);
         }
 
+        private renderSceneBackdrop() {
+          const backdrop = this.add.image(
+            SCENE_WIDTH / 2,
+            SCENE_HEIGHT / 2,
+            "khan-flict-scene-backdrop",
+          );
+          backdrop
+            .setDisplaySize(SCENE_WIDTH, SCENE_HEIGHT)
+            .setDepth(0)
+            .setAlpha(0.22)
+            .setScrollFactor(0.72, 0.72);
+        }
+
         private buildTextures(paletteValues: typeof palette) {
           if (!this.textures.exists("relic-portal")) {
             const painter = this.add.graphics();
@@ -642,6 +768,17 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
             this.ensureAnimation(`${packKey}-hurt`, `${packKey}-hurt`, 0, 5, 14, 0);
             this.ensureAnimation(`${packKey}-dead`, `${packKey}-dead`, 0, 2, 8, 0);
           }
+
+          for (const direction of DIRECTION_ORDER) {
+            this.ensureImageSequenceAnimation(
+              `salman-walk-${direction}`,
+              Array.from({ length: 4 }, (_, frame) => ({
+                key: `salman-walk-${direction}-${frame}`,
+              })),
+              8,
+              -1,
+            );
+          }
         }
 
         private ensureAnimation(
@@ -674,70 +811,76 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
           });
         }
 
-        private renderDungeonMap(layers: TileLayer[], metrics: MapMetrics) {
-          // Base layer (depth 3) — floor, water, bricks, details — BELOW the player
-          const baseTex = this.add
-            .renderTexture(metrics.originX, metrics.originY, metrics.widthPx, metrics.heightPx)
-            .setOrigin(0)
-            .setDepth(3);
-          baseTex.fill(0x0a1322, 1);
+        private ensureImageSequenceAnimation(
+          key: string,
+          frames: Array<{ key: string }>,
+          frameRate: number,
+          repeat: number,
+        ) {
+          if (this.anims.exists(key)) {
+            return;
+          }
 
-          // Object overlay (depth 25) — temples, trees, walls — ABOVE the player
-          const overlayTex = this.add
-            .renderTexture(metrics.originX, metrics.originY, metrics.widthPx, metrics.heightPx)
-            .setOrigin(0)
-            .setDepth(25);
+          this.anims.create({
+            key,
+            frames,
+            frameRate,
+            repeat,
+          });
+        }
 
-          for (const layer of layers) {
-            const isOverlay = isOverlayLayer(layer.name);
-            const target = isOverlay ? overlayTex : baseTex;
+        private renderSafeDungeonMap(grid: boolean[][], metrics: MapMetrics) {
+          const terrain = this.add.graphics().setDepth(3);
+          const cliffEdges = this.add.graphics().setDepth(13);
+          const decor = this.add.graphics().setDepth(14);
 
-            for (const chunk of layer.chunks) {
-              chunk.gids.forEach((gid, index) => {
-                if (!gid) {
-                  return;
+          terrain.fillStyle(0x0b1322, 1);
+          terrain.fillRoundedRect(metrics.originX, metrics.originY, metrics.widthPx, metrics.heightPx, 18);
+
+          for (let y = 0; y < grid.length; y += 1) {
+            for (let x = 0; x < (grid[0]?.length ?? 0); x += 1) {
+              const tileX = metrics.originX + x * MAP_TILE_SIZE;
+              const tileY = metrics.originY + y * MAP_TILE_SIZE;
+              const walkable = grid[y][x];
+
+              if (walkable) {
+                const tint = (x + y) % 3 === 0 ? 0x858d83 : (x + y) % 3 === 1 ? 0x949b91 : 0x767d74;
+                terrain.fillStyle(tint, 1);
+                terrain.fillRect(tileX, tileY, MAP_TILE_SIZE, MAP_TILE_SIZE);
+                terrain.fillStyle(0xcfc8b2, 0.08);
+                terrain.fillRect(tileX + 1, tileY + 1, MAP_TILE_SIZE - 2, MAP_TILE_SIZE - 2);
+              } else {
+                terrain.fillStyle(0x060b14, 1);
+                terrain.fillRect(tileX, tileY, MAP_TILE_SIZE, MAP_TILE_SIZE);
+                terrain.fillStyle(0x141c2e, 0.72);
+                terrain.fillRect(tileX + 1, tileY + 1, MAP_TILE_SIZE - 2, MAP_TILE_SIZE - 2);
+
+                const hasWalkableNeighbor =
+                  (grid[y - 1]?.[x] ?? false) ||
+                  (grid[y + 1]?.[x] ?? false) ||
+                  (grid[y]?.[x - 1] ?? false) ||
+                  (grid[y]?.[x + 1] ?? false);
+
+                if (hasWalkableNeighbor) {
+                  cliffEdges.fillStyle(0x1f2937, 0.95);
+                  cliffEdges.fillRoundedRect(tileX, tileY, MAP_TILE_SIZE, MAP_TILE_SIZE, 3);
+                  cliffEdges.lineStyle(1, 0x475569, 0.45);
+                  cliffEdges.strokeRoundedRect(tileX, tileY, MAP_TILE_SIZE, MAP_TILE_SIZE, 3);
                 }
-
-                const tileset = getTilesetForGid(gid);
-                if (!tileset) {
-                  return;
-                }
-
-                const frame = gid - tileset.firstGid;
-                const tileX = chunk.x + (index % chunk.width);
-                const tileY = chunk.y + Math.floor(index / chunk.width);
-                const localX = tileX - metrics.minX;
-                const localY = tileY - metrics.minY;
-
-                if (
-                  localX < 0 ||
-                  localY < 0 ||
-                  localX >= metrics.widthTiles ||
-                  localY >= metrics.heightTiles
-                ) {
-                  return;
-                }
-
-                target.drawFrame(
-                  tileset.textureKey,
-                  frame,
-                  localX * MAP_TILE_SIZE,
-                  localY * MAP_TILE_SIZE,
-                );
-              });
+              }
             }
           }
 
-          const frame = this.add.graphics();
+          decor.fillStyle(0x96f2d7, 0.26);
+          decor.fillCircle(metrics.originX + 104, metrics.originY + 106, 10);
+          decor.fillCircle(metrics.originX + metrics.widthPx - 120, metrics.originY + metrics.heightPx - 120, 10);
+          decor.fillStyle(0xfca5a5, 0.18);
+          decor.fillCircle(metrics.originX + metrics.widthPx - 180, metrics.originY + 86, 8);
+          decor.fillCircle(metrics.originX + 174, metrics.originY + metrics.heightPx - 80, 7);
+
+          const frame = this.add.graphics().setDepth(4);
           frame.lineStyle(2, 0xcbd5e1, 0.08);
-          frame.strokeRoundedRect(
-            metrics.originX,
-            metrics.originY,
-            metrics.widthPx,
-            metrics.heightPx,
-            18,
-          );
-          frame.setDepth(4);
+          frame.strokeRoundedRect(metrics.originX, metrics.originY, metrics.widthPx, metrics.heightPx, 18);
         }
 
         private buildCollisionBodies(grid: boolean[][], metrics: MapMetrics) {
@@ -761,20 +904,34 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
 
         private spawnEnemies(formations: Array<{ x: number; y: number; kind: EnemyType }>) {
           return formations.map((entry) => {
-            const packKey = ENEMY_PACK[entry.kind];
+            const directionalPack = DIRECTIONAL_ENEMY_PACK[entry.kind];
+            const packKey = directionalPack?.key ?? ENEMY_PACK[entry.kind];
+            const renderMode = directionalPack?.mode ?? "sheet";
             const shadow = this.add
               .ellipse(entry.x, entry.y + 22, 30, 12, palette.shadow, 0.38)
               .setDepth(16);
-            const sprite = this.physics.add.sprite(entry.x, entry.y, `${packKey}-idle`);
-            sprite.setDepth(18).setScale(0.4).setBounce(0.08);
-            sprite.anims.play(`${packKey}-idle`, true);
+            const initialTexture =
+              renderMode === "sheet" ? `${packKey}-idle` : `${packKey}-idle-south`;
+            const sprite = this.physics.add.sprite(entry.x, entry.y, initialTexture);
+            sprite
+              .setDepth(getActorDepth(entry.y, 17))
+              .setScale(directionalPack?.scale ?? 0.4)
+              .setBounce(0.08);
+            if (renderMode === "sheet") {
+              sprite.anims.play(`${packKey}-idle`, true);
+            }
 
-            const label = this.add.text(entry.x - 32, entry.y - 34, ENEMY_THEME[entry.kind].name, {
-              color: "#e2e8f0",
-              fontFamily: "var(--font-mono)",
-              fontSize: "10px",
-            });
-            label.setDepth(22);
+            const label = this.add.text(
+              entry.x,
+              entry.y - 34,
+              directionalPack?.label ?? ENEMY_THEME[entry.kind].name,
+              {
+                color: "#e2e8f0",
+                fontFamily: "var(--font-mono)",
+                fontSize: "10px",
+              },
+            );
+            label.setOrigin(0.5).setDepth(getActorDepth(entry.y, 22));
             const healthBar = this.add.graphics().setDepth(23);
 
             const maxHealth = ENEMY_THEME[entry.kind].health;
@@ -783,6 +940,7 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
               id: createId("enemy"),
               kind: entry.kind,
               packKey,
+              renderMode,
               sprite,
               shadow,
               label,
@@ -795,6 +953,7 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
               nextSwingAt: 0,
               animLockUntil: 0,
               alive: true,
+              facing: "south",
             };
 
             this.updateEnemyHealthBar(enemy);
@@ -814,7 +973,7 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
                 playerY + 10 + index * 10,
                 `${member.packKey}-idle`,
               )
-              .setDepth(19)
+              .setDepth(getActorDepth(playerY + 10 + index * 10, 18))
               .setScale(0.56)
               .setAlpha(0.96);
             sprite.anims.play(`${member.packKey}-idle`, true);
@@ -859,6 +1018,7 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
               Phaser.Math.Linear(companion.sprite.x, targetX, moving ? 0.12 : 0.1),
               Phaser.Math.Linear(companion.sprite.y, targetY, moving ? 0.12 : 0.1),
             );
+            companion.sprite.setDepth(getActorDepth(companion.sprite.y, 18));
             companion.sprite.setFlipX(this.player.flipX);
 
             const nextAnimation = moving
@@ -872,14 +1032,19 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
 
         private syncShadows() {
           this.playerShadow.setPosition(this.player.x, this.player.y + 21);
+          this.playerShadow.setDepth(getShadowDepth(this.player.y, 16));
           this.squadFollowers.forEach((companion) => {
             companion.shadow.setPosition(companion.sprite.x, companion.sprite.y + 19);
+            companion.shadow.setDepth(getShadowDepth(companion.sprite.y, 16));
             companion.label.setPosition(companion.sprite.x, companion.sprite.y - 34);
+            companion.label.setDepth(getActorDepth(companion.sprite.y, 21));
           });
 
           this.enemyBodies.forEach((enemy) => {
             enemy.shadow.setPosition(enemy.sprite.x, enemy.sprite.y + 20);
-            enemy.label.setPosition(enemy.sprite.x - 32, enemy.sprite.y - 34);
+            enemy.shadow.setDepth(getShadowDepth(enemy.sprite.y, 15));
+            enemy.label.setPosition(enemy.sprite.x, enemy.sprite.y - 34);
+            enemy.label.setDepth(getActorDepth(enemy.sprite.y, 21));
             this.updateEnemyHealthBar(enemy);
           });
         }
@@ -898,11 +1063,47 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
             ratio > 0.55 ? 0x4ade80 : ratio > 0.25 ? 0xfacc15 : 0xf87171;
 
           enemy.healthBar.fillStyle(0x020617, 0.82);
+          enemy.healthBar.setDepth(getActorDepth(enemy.sprite.y, 22));
           enemy.healthBar.fillRoundedRect(barX, barY, 44, 7, 3);
           enemy.healthBar.fillStyle(fillColor, 1);
           enemy.healthBar.fillRoundedRect(barX + 1, barY + 1, 42 * ratio, 5, 2);
           enemy.healthBar.lineStyle(1, 0xffffff, 0.08);
           enemy.healthBar.strokeRoundedRect(barX, barY, 44, 7, 3);
+        }
+
+        private updateDirectionalEnemyAppearance(enemy: DungeonEnemy, speed: number) {
+          if (enemy.renderMode === "directional-walk") {
+            const animationKey =
+              speed > 6 ? `${enemy.packKey}-walk-${enemy.facing}` : null;
+
+            if (animationKey && this.anims.exists(animationKey)) {
+              if (enemy.sprite.anims.currentAnim?.key !== animationKey) {
+                enemy.sprite.anims.play(animationKey, true);
+              }
+            } else {
+              enemy.sprite.anims.stop();
+              enemy.sprite.setTexture(`${enemy.packKey}-idle-${enemy.facing}`);
+            }
+            return;
+          }
+
+          enemy.sprite.anims.stop();
+          enemy.sprite.setTexture(`${enemy.packKey}-idle-${enemy.facing}`);
+        }
+
+        private nudgeDirectionalEnemy(enemy: DungeonEnemy, tint: number) {
+          if (enemy.renderMode === "sheet") {
+            return;
+          }
+
+          enemy.sprite.setTint(tint);
+          this.tweens.add({
+            targets: enemy.sprite,
+            y: enemy.sprite.y - 3,
+            duration: 70,
+            yoyo: true,
+            onComplete: () => enemy.sprite.clearTint(),
+          });
         }
 
         private spawnDamageText(x: number, y: number, text: string, color: string) {
@@ -969,7 +1170,11 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
 
           nearest.enemy.health -= hit.damage;
           nearest.enemy.animLockUntil = this.time.now + 240;
-          nearest.enemy.sprite.anims.play(`${nearest.enemy.packKey}-hurt`, true);
+          if (nearest.enemy.renderMode === "sheet") {
+            nearest.enemy.sprite.anims.play(`${nearest.enemy.packKey}-hurt`, true);
+          } else {
+            this.nudgeDirectionalEnemy(nearest.enemy, 0xfca5a5);
+          }
           this.spawnDamageText(
             nearest.enemy.sprite.x,
             nearest.enemy.sprite.y - 42,
@@ -994,7 +1199,11 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
 
         private enemyAttack(enemy: DungeonEnemy, time: number) {
           enemy.animLockUntil = time + 260;
-          enemy.sprite.anims.play(`${enemy.packKey}-attack`, true);
+          if (enemy.renderMode === "sheet") {
+            enemy.sprite.anims.play(`${enemy.packKey}-attack`, true);
+          } else {
+            this.nudgeDirectionalEnemy(enemy, 0xfcd34d);
+          }
 
           const hit = calculateDamage(
             {
@@ -1037,7 +1246,20 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
           if (this.getDynamicBody(enemy.sprite)) {
             this.getDynamicBody(enemy.sprite)!.enable = false;
           }
-          enemy.sprite.anims.play(`${enemy.packKey}-dead`, true);
+          if (enemy.renderMode === "sheet") {
+            enemy.sprite.anims.play(`${enemy.packKey}-dead`, true);
+          } else {
+            enemy.sprite.anims.stop();
+            enemy.sprite.setTint(0x1f2937);
+            this.tweens.add({
+              targets: enemy.sprite,
+              angle: enemy.sprite.angle + 10,
+              alpha: 0.42,
+              y: enemy.sprite.y + 8,
+              duration: 380,
+              ease: "Quad.easeOut",
+            });
+          }
           enemy.label.destroy();
           enemy.healthBar.destroy();
           this.enemiesDefeated += 1;
@@ -1130,28 +1352,38 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
         }
       }
 
-      gameRef.current?.destroy(true);
-      gameRef.current = new Phaser.Game({
-        type: Phaser.AUTO,
-        width: SCENE_WIDTH,
-        height: SCENE_HEIGHT,
-        parent: containerRef.current,
-        backgroundColor: "#050816",
-        pixelArt: true,
-        antialias: false,
-        physics: {
-          default: "arcade",
-          arcade: {
-            gravity: { y: 0, x: 0 },
-            debug: false,
+        gameRef.current?.destroy(true);
+        gameRef.current = new Phaser.Game({
+          type: Phaser.AUTO,
+          width: SCENE_WIDTH,
+          height: SCENE_HEIGHT,
+          parent: containerRef.current,
+          backgroundColor: "#050816",
+          pixelArt: true,
+          antialias: false,
+          physics: {
+            default: "arcade",
+            arcade: {
+              gravity: { y: 0, x: 0 },
+              debug: false,
+            },
           },
-        },
-        scene: DungeonScene,
+          scene: DungeonScene,
+        });
+      })
+      .catch((error) => {
+        const message =
+          error instanceof Error ? error.message : "Phaser failed to load.";
+        setSceneError(message);
+        setSceneBootState("error");
+        setUseSafeMode(true);
       });
-    });
 
     return () => {
       disposed = true;
+      if (bootTimer) {
+        clearTimeout(bootTimer);
+      }
       gameRef.current?.destroy(true);
       gameRef.current = null;
     };
@@ -1167,6 +1399,10 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
     props.stats.speed,
   ]);
 
+  if (useSafeMode) {
+    return <FallbackDungeon {...props} />;
+  }
+
   return (
     <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#050816]/80 shadow-[0_0_90px_rgba(86,229,255,0.08)]">
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between px-4 py-3">
@@ -1177,6 +1413,15 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
           WASD + Space
         </span>
       </div>
+      {sceneBootState !== "ready" ? (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[#050816]/70">
+          <div className="rounded-3xl border border-white/10 bg-black/40 px-5 py-4 text-center text-sm text-slate-200 backdrop-blur">
+            {sceneBootState === "booting"
+              ? "Booting the dungeon scene..."
+              : `Scene failed: ${sceneError ?? "unknown error"}`}
+          </div>
+        </div>
+      ) : null}
       <div ref={containerRef} className="aspect-[5/3] w-full min-h-[420px]" />
     </div>
   );

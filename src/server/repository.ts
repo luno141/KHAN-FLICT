@@ -24,9 +24,15 @@ export async function bootstrapProfile(
 ): Promise<PlayerSnapshot> {
   const prisma = getPrismaClient();
 
-  const existing = await prisma.player.findUnique({
-    where: { id: input.playerId },
-  });
+  const existing =
+    (await prisma.player.findUnique({
+      where: { id: input.playerId },
+    })) ??
+    (input.walletAddress
+      ? await prisma.player.findUnique({
+          where: { walletAddress: input.walletAddress },
+        })
+      : null);
 
   if (!existing) {
     const profile = createStarterProfile(
@@ -80,7 +86,7 @@ export async function bootstrapProfile(
     });
   } else {
     await prisma.player.update({
-      where: { id: input.playerId },
+      where: { id: existing.id },
       data: {
         displayName: input.displayName,
         walletAddress: input.walletAddress ?? existing.walletAddress,
@@ -88,7 +94,7 @@ export async function bootstrapProfile(
     });
   }
 
-  return getPlayerSnapshot(input.playerId);
+  return getPlayerSnapshot(existing?.id ?? input.playerId);
 }
 
 export async function getPlayerSnapshot(playerId: string): Promise<PlayerSnapshot> {
@@ -101,7 +107,7 @@ export async function getPlayerSnapshot(playerId: string): Promise<PlayerSnapsho
 
   const listings = await getActiveListings();
   const purchaseHistory = await prisma.purchaseHistory.findMany({
-    where: { buyerPlayerId: playerId },
+    where: { buyerPlayerId: player.id },
     orderBy: { purchasedAt: "desc" },
   });
 
@@ -124,28 +130,30 @@ export async function syncProfileState(
   input: SyncProfileInput,
 ): Promise<PlayerSnapshot> {
   const prisma = getPrismaClient();
+  const player = await getRequiredPlayerRecord(prisma, input.playerId);
+  const canonicalPlayerId = player.id;
 
   await prisma.$transaction(async (tx) => {
     for (const item of input.inventory) {
       await upsertItemTemplate(tx, item.templateId);
       await tx.inventoryItem.upsert({
         where: { id: item.instanceId },
-        create: inventoryItemToRecord(input.playerId, item),
-        update: inventoryItemToRecord(input.playerId, item),
+        create: inventoryItemToRecord(canonicalPlayerId, item),
+        update: inventoryItemToRecord(canonicalPlayerId, item),
       });
     }
 
     const safeIds = input.inventory.map((item) => item.instanceId);
     await tx.inventoryItem.deleteMany({
       where: {
-        playerId: input.playerId,
+        playerId: canonicalPlayerId,
         listed: false,
         ...(safeIds.length > 0 ? { id: { notIn: safeIds } } : {}),
       },
     });
 
     await tx.equippedItem.deleteMany({
-      where: { playerId: input.playerId },
+      where: { playerId: canonicalPlayerId },
     });
 
     const equippedEntries = Object.entries(input.equipped)
@@ -154,7 +162,7 @@ export async function syncProfileState(
     if (equippedEntries.length > 0) {
       await tx.equippedItem.createMany({
         data: equippedEntries.map(([slot, inventoryItemId]) => ({
-          playerId: input.playerId,
+          playerId: canonicalPlayerId,
           slot,
           inventoryItemId,
         })),
@@ -166,7 +174,7 @@ export async function syncProfileState(
         where: { id: run.id },
         create: {
           id: run.id,
-          playerId: input.playerId,
+          playerId: canonicalPlayerId,
           roomName: run.roomName,
           enemiesDefeated: run.enemiesDefeated,
           lootCollected: run.lootCollected,
@@ -192,7 +200,7 @@ export async function syncProfileState(
         where: { id: match.id },
         create: {
           id: match.id,
-          playerId: input.playerId,
+          playerId: canonicalPlayerId,
           opponentName: match.opponentName,
           outcome: match.outcome,
           summary: match.summary,
@@ -209,13 +217,13 @@ export async function syncProfileState(
 
     if (input.walletAddress) {
       await tx.player.update({
-        where: { id: input.playerId },
+        where: { id: canonicalPlayerId },
         data: { walletAddress: input.walletAddress },
       });
     }
   });
 
-  return getPlayerSnapshot(input.playerId);
+  return getPlayerSnapshot(canonicalPlayerId);
 }
 
 export async function getActiveListings(): Promise<MarketplaceListing[]> {
@@ -248,13 +256,15 @@ export async function createMarketListing(
   input: CreateListingInput,
 ): Promise<MarketplaceListing[]> {
   const prisma = getPrismaClient();
+  validateCreateListingInput(input);
+  const player = await getRequiredPlayerRecord(prisma, input.playerId);
 
   const inventoryItem = await prisma.inventoryItem.findUnique({
     where: { id: input.inventoryItemId },
     include: { player: true },
   });
 
-  if (!inventoryItem || inventoryItem.playerId !== input.playerId) {
+  if (!inventoryItem || inventoryItem.playerId !== player.id) {
     throw new Error("Artifact not found in inventory.");
   }
   if (!inventoryItem.premium) {
@@ -273,10 +283,11 @@ export async function createMarketListing(
     await tx.marketplaceListing.create({
       data: {
         id: crypto.randomUUID(),
-        sellerPlayerId: input.playerId,
+        sellerPlayerId: player.id,
         inventoryItemId: input.inventoryItemId,
         priceWei: input.priceWei,
         status: "active",
+        chainListingId: input.chainListingId ?? null,
       },
     });
   });
@@ -288,6 +299,8 @@ export async function purchaseMarketListing(
   input: PurchaseListingInput,
 ): Promise<PlayerSnapshot> {
   const prisma = getPrismaClient();
+  validatePurchaseListingInput(input);
+  const buyer = await getRequiredPlayerRecord(prisma, input.buyerPlayerId);
 
   const listing = await prisma.marketplaceListing.findUnique({
     where: { id: input.listingId },
@@ -297,6 +310,9 @@ export async function purchaseMarketListing(
   if (!listing || listing.status !== "active") {
     throw new Error("Listing not found.");
   }
+  if (listing.sellerPlayerId === buyer.id) {
+    throw new Error("You already own this listing.");
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.marketplaceListing.update({
@@ -304,14 +320,14 @@ export async function purchaseMarketListing(
       data: {
         status: "sold",
         soldAt: new Date(),
-        buyerPlayerId: input.buyerPlayerId,
+        buyerPlayerId: buyer.id,
       },
     });
 
     await tx.inventoryItem.update({
       where: { id: listing.inventoryItemId },
       data: {
-        playerId: input.buyerPlayerId,
+        playerId: buyer.id,
         listed: false,
       },
     });
@@ -327,7 +343,7 @@ export async function purchaseMarketListing(
       data: {
         id: crypto.randomUUID(),
         listingId: listing.id,
-        buyerPlayerId: input.buyerPlayerId,
+        buyerPlayerId: buyer.id,
         sellerPlayerId: listing.sellerPlayerId,
         itemName: listing.inventoryItem.name,
         priceWei: listing.priceWei,
@@ -335,7 +351,7 @@ export async function purchaseMarketListing(
     });
   });
 
-  return getPlayerSnapshot(input.buyerPlayerId);
+  return getPlayerSnapshot(buyer.id);
 }
 
 export async function recordMockPvp(
@@ -381,24 +397,50 @@ async function getPlayerRecord(
   prisma: ReturnType<typeof getPrismaClient>,
   playerId: string,
 ) {
-  return prisma.player.findUnique({
+  const include = {
+    character: true,
+    inventoryItems: {
+      orderBy: { createdAt: "desc" as const },
+    },
+    equippedItems: true,
+    dungeonRuns: {
+      orderBy: { endedAt: "desc" as const },
+      take: 8,
+    },
+    pvpMatches: {
+      orderBy: { createdAt: "desc" as const },
+      take: 8,
+    },
+  };
+
+  const directRecord = await prisma.player.findUnique({
     where: { id: playerId },
+    include,
+  });
+
+  if (directRecord) {
+    return directRecord;
+  }
+
+  return prisma.player.findUnique({
+    where: { walletAddress: playerId },
     include: {
-      character: true,
-      inventoryItems: {
-        orderBy: { createdAt: "desc" },
-      },
-      equippedItems: true,
-      dungeonRuns: {
-        orderBy: { endedAt: "desc" },
-        take: 8,
-      },
-      pvpMatches: {
-        orderBy: { createdAt: "desc" },
-        take: 8,
-      },
+      ...include,
     },
   });
+}
+
+async function getRequiredPlayerRecord(
+  prisma: ReturnType<typeof getPrismaClient>,
+  playerId: string,
+) {
+  const player = await getPlayerRecord(prisma, playerId);
+
+  if (!player) {
+    throw new Error("Player profile not found.");
+  }
+
+  return player;
 }
 
 function mapPlayerRecord(player: NonNullable<PrismaPlayerRecord>): PlayerProfile {
@@ -531,6 +573,9 @@ async function upsertItemTemplate(
   templateId: string,
 ) {
   const template = ITEM_TEMPLATES[templateId];
+  if (!template) {
+    throw new Error(`Unknown item template: ${templateId}`);
+  }
 
   await tx.item.upsert({
     where: { id: templateId },
@@ -568,4 +613,19 @@ async function upsertItemTemplate(
       healAmount: template.healAmount ?? null,
     },
   });
+}
+
+function validateCreateListingInput(input: CreateListingInput) {
+  if (!input.playerId || !input.inventoryItemId) {
+    throw new Error("playerId and inventoryItemId are required.");
+  }
+  if (!/^\d+$/.test(input.priceWei) || BigInt(input.priceWei) <= 0n) {
+    throw new Error("Listing price must be a positive wei string.");
+  }
+}
+
+function validatePurchaseListingInput(input: PurchaseListingInput) {
+  if (!input.buyerPlayerId || !input.listingId) {
+    throw new Error("buyerPlayerId and listingId are required.");
+  }
 }

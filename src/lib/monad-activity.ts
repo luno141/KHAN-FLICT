@@ -1,3 +1,6 @@
+import { useEffect, useState } from "react";
+import { getMonadExplorerTxUrl } from "@/src/lib/monad-explorer";
+
 /**
  * Monad on-chain activity log.
  *
@@ -51,13 +54,8 @@ export function getActivity(): ChainAction[] {
 
 /** Build the full Monad explorer URL for a tx hash. */
 export function explorerTxUrl(txHash: string): string {
-    const base =
-        process.env.NEXT_PUBLIC_MONAD_EXPLORER_URL?.replace(/\/$/, "") ??
-        "https://testnet.monadexplorer.com";
-    return `${base}/tx/${txHash}`;
+    return getMonadExplorerTxUrl(txHash);
 }
-
-import { useEffect, useState } from "react";
 
 /** React hook for the current activity log. */
 export function useMonadActivity() {

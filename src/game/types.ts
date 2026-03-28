@@ -168,6 +168,7 @@ export type CreateListingInput = {
   playerId: string;
   inventoryItemId: string;
   priceWei: string;
+  chainListingId?: string | null;
 };
 
 export type PurchaseListingInput = {

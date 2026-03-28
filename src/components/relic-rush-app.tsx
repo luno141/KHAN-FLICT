@@ -4,6 +4,16 @@ import { useEffect, useEffectEvent, useState } from "react";
 import { ethers } from "ethers";
 import { PhaserDungeon } from "@/src/components/phaser-dungeon";
 import {
+  HeroBootstrapPanels,
+  WalletGatePanel,
+} from "@/src/components/relic-rush-entry-panels";
+import {
+  InventoryBadge,
+  ItemVisual,
+  Section,
+  StatTile,
+} from "@/src/components/relic-rush-ui";
+import {
   ARCHETYPES,
   DEFAULT_MARKET_PRICE_WEI,
   DUNGEON_NAME,
@@ -25,9 +35,9 @@ import {
   formatMon,
   getCombatPower,
   getDerivedStats,
-  rarityColor,
   rollLoot,
 } from "@/src/game/helpers";
+import { resolveItemIcon } from "@/src/game/items";
 import type {
   CombatLogEntry,
   DungeonRunSummary,
@@ -50,8 +60,6 @@ import {
 import {
   clearStoredSession,
   clearStoredSnapshot,
-  readStoredPlayerId,
-  readStoredSnapshot,
   saveStoredPlayerId,
   saveStoredSnapshot,
 } from "@/src/lib/relic-rush-storage";
@@ -77,13 +85,13 @@ import {
   getInjectedBrowserProvider,
   getMonadExplorerTxUrl,
   hasInjectedWallet,
-  hasMonadExplorerUrl,
   readWalletState,
   shortenAddress,
   subscribeToWalletEvents,
   switchToExpectedChain,
   type WalletState,
 } from "@/src/lib/wallet";
+import { shortenTxHash } from "@/src/lib/monad-explorer";
 import { 
   useMonadActivity, 
   pushChainAction, 
@@ -108,69 +116,6 @@ const DEFAULT_WALLET: WalletState = {
   chainName: expectedChainName,
   correctNetwork: false,
 };
-
-function Section({
-  eyebrow,
-  title,
-  children,
-  actions,
-}: {
-  eyebrow: string;
-  title: string;
-  children: React.ReactNode;
-  actions?: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-[1.75rem] border border-white/10 bg-slate-950/55 p-5 shadow-[0_0_60px_rgba(86,229,255,0.04)] backdrop-blur-xl">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500">
-            {eyebrow}
-          </p>
-          <h2 className="mt-2 text-xl font-semibold text-white">{title}</h2>
-        </div>
-        {actions}
-      </div>
-      <div className="mt-4">{children}</div>
-    </section>
-  );
-}
-
-function StatTile({
-  label,
-  value,
-  emphasis,
-}: {
-  label: string;
-  value: React.ReactNode;
-  emphasis?: string;
-}) {
-  return (
-    <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
-      <p className="text-[11px] uppercase tracking-[0.26em] text-slate-500">
-        {label}
-      </p>
-      <p className={`mt-3 text-2xl font-semibold ${emphasis ?? "text-white"}`}>
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function InventoryBadge({ item }: { item: InventoryItem }) {
-  return (
-    <span
-      className="inline-flex items-center rounded-full border px-2 py-1 text-[11px] uppercase tracking-[0.2em]"
-      style={{
-        borderColor: `${rarityColor(item.rarity)}55`,
-        color: rarityColor(item.rarity),
-        background: `${rarityColor(item.rarity)}15`,
-      }}
-    >
-      {item.rarity}
-    </span>
-  );
-}
 
 export function RelicRushApp() {
   const [activeTab, setActiveTab] = useState<TabId>("dungeon");
@@ -236,29 +181,28 @@ export function RelicRushApp() {
           const snapshot = await fetchProfile(walletPlayerId);
           applySnapshot(snapshot, `Welcome back, ${snapshot.profile.displayName}.`);
         } catch {
+          clearProfileState(walletPlayerId);
           setStatus("Wallet connected. Bootstrap Shah Rukh Khan to begin.");
         } finally {
           setApiBusy(false);
         }
       } else {
-        // No wallet — fall back to cached session if available
-        const storedId = readStoredPlayerId();
-        const cachedSnapshot = readStoredSnapshot();
-        if (storedId && cachedSnapshot?.profile.playerId === storedId) {
-          setPlayerId(storedId);
-          applySnapshot(cachedSnapshot, `Welcome back, ${cachedSnapshot.profile.displayName}.`);
-        }
+        clearProfileState(null);
+        setStatus("Shah Rukh Khan is ready. Connect your wallet to begin the rescue mission.");
       }
 
       void loadListings();
     } catch {
       setWallet(DEFAULT_WALLET);
+      clearProfileState(null);
     }
   }
 
   useEffect(() => {
     if (wallet.address && hasRelicRushLedgerAddress()) {
       void fetchOnChainBestScore();
+    } else {
+      setOnChainBestScore(null);
     }
   }, [wallet.address]);
 
@@ -296,27 +240,6 @@ export function RelicRushApp() {
     }
   }, [profile, derivedStats?.health]);
 
-  async function hydrateProfile(storedPlayerId: string) {
-    try {
-      setApiBusy(true);
-      const snapshot = await fetchProfile(storedPlayerId);
-      applySnapshot(snapshot, `Welcome back, ${snapshot.profile.displayName}.`);
-    } catch {
-      const cachedSnapshot = readStoredSnapshot();
-
-      if (cachedSnapshot?.profile.playerId === storedPlayerId) {
-        applySnapshot(cachedSnapshot, `Recovered ${cachedSnapshot.profile.displayName} from local cache.`);
-        await restoreProfileFromCache(cachedSnapshot);
-        return;
-      }
-
-      clearSavedSession();
-      setStatus("Previous profile could not be restored. Start a fresh run.");
-    } finally {
-      setApiBusy(false);
-    }
-  }
-
   function applySnapshot(snapshot: PlayerSnapshot, nextStatus?: string) {
     const normalizedProfile: PlayerProfile = {
       ...snapshot.profile,
@@ -343,47 +266,29 @@ export function RelicRushApp() {
     }, 5500);
   }
 
-  async function restoreProfileFromCache(snapshot: PlayerSnapshot) {
-    try {
-      setApiBusy(true);
-      const bootstrapped = await bootstrapProfile({
-        playerId: snapshot.profile.playerId,
-        archetype: PLAYER_ARCHETYPE,
-        displayName: PLAYER_HERO_NAME,
-        walletAddress: snapshot.profile.walletAddress,
-      });
-
-      const restored = await syncProfile({
-        playerId: snapshot.profile.playerId,
-        inventory: snapshot.profile.inventory,
-        equipped: snapshot.profile.equipped,
-        runs: snapshot.profile.runs,
-        pvpHistory: snapshot.profile.pvpHistory,
-        walletAddress: snapshot.profile.walletAddress,
-      });
-
-      applySnapshot(
-        {
-          profile: restored.profile,
-          listings: restored.listings,
-          purchaseHistory: restored.purchaseHistory,
-        },
-        `Recovered ${bootstrapped.profile.displayName} after local restart.`,
-      );
-    } catch {
-      clearSavedSession();
-      setStatus("Saved cache could not be restored. Start a fresh run.");
-    } finally {
-      setApiBusy(false);
+  function resetRunUi(nextStatus?: string) {
+    setCurrentHealth(0);
+    setRunActive(false);
+    setRunId("");
+    setCombatLog([createLog("No story run active.", "neutral")]);
+    if (nextStatus) {
+      setStatus(nextStatus);
     }
+  }
+
+  function clearProfileState(nextPlayerId: string | null = null) {
+    setPlayerId(nextPlayerId);
+    setProfile(null);
+    setPurchaseHistory([]);
+    setPriceInputs({});
+    setOnChainBestScore(null);
+    resetRunUi();
   }
 
   function clearSavedSession() {
     clearStoredSession();
-    setPlayerId(null);
-    setProfile(null);
+    clearProfileState(null);
     setListings([]);
-    setPurchaseHistory([]);
   }
 
   async function refreshWallet() {
@@ -409,7 +314,7 @@ export function RelicRushApp() {
 
   async function handleCreateProfile() {
     if (!wallet.address) {
-      setStatus("Connect your wallet first.");
+      setStatus("Connect your wallet first. Offline play has been removed.");
       return;
     }
 
@@ -477,7 +382,7 @@ export function RelicRushApp() {
           const snapshot = await fetchProfile(walletPlayerId);
           applySnapshot(snapshot, `Welcome back, ${snapshot.profile.displayName}.`);
         } catch {
-          setProfile(null);
+          clearProfileState(walletPlayerId);
           setStatus("Wallet connected. Bootstrap Shah Rukh Khan to begin.");
         } finally {
           setApiBusy(false);
@@ -486,6 +391,16 @@ export function RelicRushApp() {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Wallet connection failed.");
     }
+  }
+
+  function handleRemoveWallet() {
+    clearSavedSession();
+    setWallet(DEFAULT_WALLET);
+    setApiBusy(false);
+    setTxPending(false);
+    setCombatLog([createLog("Wallet removed. Connect another wallet to continue.", "neutral")]);
+    setStatus("Wallet removed from this app session. Connect another wallet when ready.");
+    void loadListings();
   }
 
   async function handleSwitchChain() {
@@ -641,7 +556,10 @@ export function RelicRushApp() {
     void persistProfile(nextProfile, `${item.name} consumed.`);
   }
 
-  async function handleCreateListing(item: InventoryItem) {
+  async function handleCreateListing(
+    item: InventoryItem,
+    chainListingId?: string | null,
+  ) {
     if (!profile) {
       return;
     }
@@ -654,6 +572,7 @@ export function RelicRushApp() {
         playerId: profile.playerId,
         inventoryItemId: item.instanceId,
         priceWei,
+        chainListingId,
       });
       setListings(nextListings);
       const snapshot = await fetchProfile(profile.playerId);
@@ -732,16 +651,35 @@ export function RelicRushApp() {
       const tokenURI = JSON.stringify({
         name: item.name,
         description: item.description,
-        icon: item.icon,
+        icon: resolveItemIcon(item),
         rarity: item.rarity,
         bonuses: item.bonuses
       });
 
       const tx = await market.mintPremiumArtifact(wallet.address, artifactId, tokenURI);
+      addToast(
+        `${item.name} mint submitted to Monad. Waiting for confirmation…`,
+        "pending",
+        tx.hash,
+      );
       const receipt = await tx.wait();
       const ms = Date.now() - t0;
 
       if (receipt) {
+        let mintedTokenId: string | null = null;
+
+        for (const log of receipt.logs) {
+          try {
+            const parsed = market.interface.parseLog(log);
+            if (parsed?.name === "PremiumArtifactMinted") {
+              mintedTokenId = parsed.args.tokenId.toString();
+              break;
+            }
+          } catch {
+            continue;
+          }
+        }
+
         addToast(`${item.name} minted successfully!`, "success", receipt.hash);
         pushChainAction({
           label: `Mint · ${item.name}`,
@@ -750,17 +688,21 @@ export function RelicRushApp() {
           at: new Date()
         });
 
-        setProfile((current) => {
-          if (!current) return current;
-          return {
-            ...current,
-            inventory: current.inventory.map((inv) =>
-              inv.instanceId === item.instanceId
-                ? { ...inv, chainTokenId: receipt.hash }
-                : inv,
-            ),
-          };
-        });
+        const nextProfile: PlayerProfile = {
+          ...profile,
+          inventory: profile.inventory.map((inv) =>
+            inv.instanceId === item.instanceId
+              ? { ...inv, chainTokenId: mintedTokenId ?? inv.chainTokenId ?? null }
+              : inv,
+          ),
+        };
+
+        await persistProfile(
+          nextProfile,
+          mintedTokenId
+            ? `${item.name} minted on Monad as token #${mintedTokenId}.`
+            : `${item.name} minted on Monad.`,
+        );
       }
     } catch (error: any) {
       console.error("Mint failed:", error);
@@ -794,10 +736,20 @@ export function RelicRushApp() {
 
       // Approve
       const approveTx = await market.approve(relicRushMarketAddress, item.chainTokenId);
+      addToast(
+        `${item.name} approval submitted to Monad.`,
+        "pending",
+        approveTx.hash,
+      );
       await approveTx.wait();
 
       // List
       const tx = await market.createListing(item.chainTokenId, priceWei);
+      addToast(
+        `${item.name} listing submitted to Monad. Waiting for confirmation…`,
+        "pending",
+        tx.hash,
+      );
       const receipt = await tx.wait();
       const ms = Date.now() - t0;
 
@@ -810,7 +762,7 @@ export function RelicRushApp() {
           at: new Date()
         });
         
-        await handleCreateListing(item);
+        await handleCreateListing(item, item.chainTokenId);
       }
     } catch (error: any) {
       console.error("List failed:", error);
@@ -834,6 +786,11 @@ export function RelicRushApp() {
         const market = createRelicRushArtifactMarket(signer, relicRushMarketAddress);
 
         const tx = await market.buyListing(listing.chainListingId, { value: listing.priceWei });
+        addToast(
+          `${listing.item.name} purchase submitted to Monad. Waiting for confirmation…`,
+          "pending",
+          tx.hash,
+        );
         const receipt = await tx.wait();
         const ms = Date.now() - t0;
 
@@ -846,10 +803,14 @@ export function RelicRushApp() {
             at: new Date()
           });
           
-          const snapshot = await fetchProfile(profile.playerId);
+          const snapshot = await purchaseListing({
+            buyerPlayerId: profile.playerId,
+            listingId: listing.id,
+          });
           setProfile(snapshot.profile);
           setListings(snapshot.listings);
           setPurchaseHistory(snapshot.purchaseHistory);
+          setStatus(`Purchased ${listing.item.name} for ${formatMon(listing.priceWei)} MON.`);
         }
       } catch (error: any) {
         console.error("Buy failed:", error);
@@ -876,6 +837,7 @@ export function RelicRushApp() {
 
       const score = summary.enemiesDefeated * 50 + summary.lootCollected * 25;
       const tx = await ledger.recordRun(1, score);
+      addToast("Run record submitted to Monad. Waiting for confirmation…", "pending", tx.hash);
       const receipt = await tx.wait();
       const ms = Date.now() - t0;
 
@@ -919,11 +881,12 @@ export function RelicRushApp() {
       const tokenURI = JSON.stringify({ 
         name: forgedItem.name, 
         description: forgedItem.description, 
-        icon: forgedItem.icon, 
+        icon: resolveItemIcon(forgedItem), 
         rarity: forgedItem.rarity 
       });
 
       const tx = await forge.forgeRandomRelic(artifactId, tokenURI, { value: forgeFee });
+      addToast("Relic forge transaction submitted to Monad. Waiting for confirmation…", "pending", tx.hash);
       const receipt = await tx.wait();
       const ms = Date.now() - t0;
 
@@ -952,9 +915,8 @@ export function RelicRushApp() {
 
   function handleResetSave() {
     clearSavedSession();
-    setCurrentHealth(0);
-    setRunActive(false);
-    setRunId("");
+    setApiBusy(false);
+    setTxPending(false);
     setCombatLog([createLog("New expedition slate ready.", "neutral")]);
     setStatus("Save reset. Bootstrap Shah Rukh Khan to begin again.");
   }
@@ -1010,8 +972,17 @@ export function RelicRushApp() {
                   onClick={() => void handleConnectWallet()}
                   className="rounded-full border border-cyan-400/35 bg-cyan-400/15 px-4 py-3 text-sm text-cyan-100 transition hover:bg-cyan-400/25"
                 >
-                  {wallet.address ? "Refresh Wallet" : "Connect Wallet"}
+                  {wallet.address ? "Reconnect Wallet" : "Connect Wallet"}
                 </button>
+                {wallet.address ? (
+                  <button
+                    type="button"
+                    onClick={handleRemoveWallet}
+                    className="rounded-full border border-slate-400/25 bg-slate-400/10 px-4 py-3 text-sm text-slate-100 transition hover:bg-slate-400/20"
+                  >
+                    Remove Wallet
+                  </button>
+                ) : null}
                 {!wallet.correctNetwork && wallet.address ? (
                   <button
                     type="button"
@@ -1050,124 +1021,7 @@ export function RelicRushApp() {
           ))}
         </section>
 
-        {!wallet.address ? (
-          /* ── Wallet Gate ── */
-          <section className="mt-4">
-            <Section eyebrow="Casting Call" title="Link your wallet to enter Filmygarh">
-              <div className="space-y-4 text-center">
-                <div className="rounded-3xl border border-amber-400/20 bg-amber-400/5 p-6">
-                  <p className="text-4xl">🔗</p>
-                  <h3 className="mt-4 text-xl font-semibold text-white">
-                    Wallet First, Slow Motion Later
-                  </h3>
-                  <p className="mt-2 text-sm text-slate-400">
-                    Your wallet is your hero identity. Connect to enter the dungeon, mint relics,
-                    and trade meme-tier artifacts on Monad when you are ready.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => void handleConnectWallet()}
-                    className="mt-5 rounded-full border border-amber-400/40 bg-amber-400/15 px-6 py-3 text-sm font-medium text-amber-100 transition hover:bg-amber-400/25"
-                  >
-                    Connect Wallet
-                  </button>
-                </div>
-              </div>
-            </Section>
-          </section>
-        ) : !profile ? (
-          <section className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
-            <Section eyebrow="Lead Cast" title="Locked hero: Shah Rukh Khan">
-              <div className="rounded-[1.5rem] border border-lime-400/25 bg-lime-400/8 p-5">
-                <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
-                  Playable Hero
-                </p>
-                <h3 className="mt-3 text-3xl font-semibold text-white">
-                  {PLAYER_HERO_NAME}
-                </h3>
-                <p className="mt-3 text-sm text-slate-300">
-                  {playerBlueprint.title}
-                </p>
-                <p className="mt-3 text-sm leading-7 text-slate-300">
-                  {playerBlueprint.signature}
-                </p>
-                <p className="mt-4 text-sm text-slate-400">{playerBlueprint.lore}</p>
-                <div className="mt-5 grid grid-cols-2 gap-2 text-xs text-slate-300 sm:grid-cols-3">
-                  <span>HP {playerBlueprint.baseStats.health}</span>
-                  <span>ATK {playerBlueprint.baseStats.attack}</span>
-                  <span>DEF {playerBlueprint.baseStats.defense}</span>
-                  <span>SPD {playerBlueprint.baseStats.speed}</span>
-                  <span>CRIT {Math.round(playerBlueprint.baseStats.critChance * 100)}%</span>
-                  <span>LUCK {playerBlueprint.baseStats.luck}</span>
-                </div>
-              </div>
-              <div className="mt-4 grid gap-3">
-                {SQUAD_SPOTLIGHTS.filter(
-                  (spotlight) => spotlight.castName !== PLAYER_HERO_NAME,
-                ).map((spotlight) => (
-                  <div
-                    key={spotlight.archetype}
-                    className="rounded-3xl border border-white/10 bg-black/20 p-4"
-                  >
-                    <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
-                      Sidekick
-                    </p>
-                    <div className="mt-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <h3 className="text-lg font-semibold text-white">{spotlight.castName}</h3>
-                      <span className="text-xs text-cyan-200">{spotlight.role}</span>
-                    </div>
-                    <p className="mt-2 text-sm text-slate-300">{spotlight.vibe}</p>
-                  </div>
-                ))}
-              </div>
-            </Section>
-
-            <Section
-              eyebrow="Hero Entry"
-              title="Bootstrap Shah Rukh Khan"
-              actions={
-                <button
-                  type="button"
-                  onClick={() => void handleCreateProfile()}
-                  disabled={apiBusy}
-                  className="rounded-full border border-lime-400/35 bg-lime-400/15 px-4 py-2 text-sm text-lime-100 disabled:opacity-50"
-                >
-                  {apiBusy ? "Rolling Credits..." : "Start as SRK"}
-                </button>
-              }
-            >
-              <div className="space-y-4">
-                <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
-                  <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
-                    Hero Slot
-                  </p>
-                  <p className="mt-3 text-lg font-semibold text-white">
-                    {PLAYER_HERO_NAME}
-                  </p>
-                  <p className="mt-2 text-xs text-slate-400">
-                    Class selection is removed. The story now always starts with Shah Rukh Khan as the playable lead.
-                  </p>
-                </div>
-
-                <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
-                  <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
-                    Wallet Identity
-                  </p>
-                  <p className="mt-3 font-mono text-sm text-lime-200">
-                    {wallet.address?.slice(0, 6)}…{wallet.address?.slice(-4)}
-                  </p>
-                  <p className="mt-2 text-xs text-slate-400">
-                    Your wallet address is your player ID. Story progress, relics, and Monad transactions stay tied to this cast slot.
-                  </p>
-                </div>
-
-                <div className="rounded-3xl border border-cyan-400/15 bg-cyan-400/10 p-4 text-sm text-cyan-100">
-                  Current story arc: Salman rules the dungeon, Aishwarya is the relic core, and your squad is catastrophically under-qualified in the best way.
-                </div>
-              </div>
-            </Section>
-          </section>
-        ) : (
+        {profile ? (
           <>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
               <StatTile label="Hero" value={PLAYER_HERO_NAME} emphasis="text-cyan-100" />
@@ -1261,10 +1115,10 @@ export function RelicRushApp() {
                           </p>
                           <div className="mt-5 grid gap-3 sm:grid-cols-3">
                             <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-4 text-sm text-slate-300">
-                              Rajpal Gremlin
+                              Chota Pandit
                             </div>
                             <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-4 text-sm text-slate-300">
-                              Bhai Bouncer
+                              Salman Khan
                             </div>
                             <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-4 text-sm text-slate-300">
                               SUV Spirit
@@ -1323,8 +1177,8 @@ export function RelicRushApp() {
                           >
                             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                               <div className="flex gap-4">
-                                <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/70 text-2xl">
-                                  {item.icon}
+                                <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/70 p-2 text-2xl">
+                                  <ItemVisual item={item} className="h-full w-full object-contain" />
                                 </div>
                                 <div>
                                   <div className="flex flex-wrap items-center gap-2">
@@ -1368,7 +1222,7 @@ export function RelicRushApp() {
                                       <button
                                         type="button"
                                         onClick={() => void handleMintOnChain(item)}
-                                        disabled={txPending || apiBusy}
+                                        disabled={txPending || apiBusy || !wallet.address}
                                         className="rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs text-amber-100 disabled:opacity-40"
                                       >
                                         {txPending ? "Minting…" : "Mint on Monad"}
@@ -1429,9 +1283,27 @@ export function RelicRushApp() {
                           </p>
                           <div className="mt-4 grid gap-3">
                             {ownedPremiumArtifacts.length === 0 ? (
-                              <p className="text-sm text-slate-400">
-                                No tradable relics yet. Hunt the SUV Spirit and late-floor elites for premium drops.
-                              </p>
+                              <div className="rounded-3xl border border-white/10 bg-slate-950/65 p-4">
+                                <p className="text-sm text-slate-300">
+                                  No tradable relics yet. Hunt the SUV Spirit and late-floor elites for premium drops.
+                                </p>
+                                <div className="mt-4 flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveTab("dungeon")}
+                                    className="rounded-full border border-lime-400/30 bg-lime-400/10 px-3 py-2 text-xs text-lime-100"
+                                  >
+                                    Go To Story Run
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveTab("forge")}
+                                    className="rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs text-amber-100"
+                                  >
+                                    Open Forge
+                                  </button>
+                                </div>
+                              </div>
                             ) : (
                               ownedPremiumArtifacts.map((item) => (
                                 <div
@@ -1441,7 +1313,10 @@ export function RelicRushApp() {
                                   <div className="flex items-start justify-between gap-4">
                                     <div>
                                       <p className="text-lg font-semibold text-white">
-                                        {item.icon} {item.name}
+                                      <span className="inline-flex items-center gap-2">
+                                        <ItemVisual item={item} className="h-6 w-6 object-contain" />
+                                        <span>{item.name}</span>
+                                      </span>
                                       </p>
                                       <p className="mt-2 text-sm text-slate-300">
                                         {item.description}
@@ -1461,7 +1336,7 @@ export function RelicRushApp() {
                                       }
                                       className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white outline-none focus:border-cyan-400/35"
                                     />
-                                    {item.chainTokenId && hasRelicRushMarketAddress() ? (
+                                    {item.chainTokenId && hasRelicRushMarketAddress() && wallet.address ? (
                                       <button
                                         type="button"
                                         onClick={() => void handleListOnChain(item)}
@@ -1500,9 +1375,27 @@ export function RelicRushApp() {
                         </p>
                         <div className="mt-4 grid gap-3">
                           {activeListings.length === 0 ? (
-                            <p className="text-sm text-slate-400">
-                              No listings yet. List your first premium relic to seed the black-market gossip loop.
-                            </p>
+                            <div className="rounded-3xl border border-white/10 bg-slate-950/65 p-4">
+                              <p className="text-sm text-slate-300">
+                                No listings yet. List your first premium relic to seed the black-market gossip loop.
+                              </p>
+                              <div className="mt-4 flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveTab("inventory")}
+                                  className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs text-cyan-100"
+                                >
+                                  Check Loadout
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveTab("dungeon")}
+                                  className="rounded-full border border-lime-400/30 bg-lime-400/10 px-3 py-2 text-xs text-lime-100"
+                                >
+                                  Hunt Premium Drops
+                                </button>
+                              </div>
+                            </div>
                           ) : (
                             activeListings.map((listing) => (
                               <div
@@ -1512,7 +1405,10 @@ export function RelicRushApp() {
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
                                     <p className="text-lg font-semibold text-white">
-                                      {listing.item.icon} {listing.item.name}
+                                      <span className="inline-flex items-center gap-2">
+                                        <ItemVisual item={listing.item} className="h-6 w-6 object-contain" />
+                                        <span>{listing.item.name}</span>
+                                      </span>
                                     </p>
                                     <p className="mt-2 text-sm text-slate-300">
                                       Seller {listing.sellerName} • {formatMon(listing.priceWei)} MON
@@ -1643,10 +1539,6 @@ export function RelicRushApp() {
                           <li>3. Your new relic is minted as an ERC-721 on Monad</li>
                           <li>4. Equip it, list it in the bazaar, or trade it</li>
                         </ol>
-                        <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4 text-xs text-amber-100">
-                          Demo-grade randomness. Not suitable for production value-bearing
-                          decisions.
-                        </div>
                       </div>
                     </div>
                   </Section>
@@ -1654,141 +1546,25 @@ export function RelicRushApp() {
               </div>
 
               <div className="flex flex-col gap-5">
-                <Section eyebrow="Monad Network" title="On-chain activity">
-                  <div className="space-y-4">
-                    <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Network</p>
-                          <p className="mt-2 text-sm text-white">{expectedChainName}</p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Chain ID</p>
-                          <p className="mt-2 text-sm text-white">{expectedChainId}</p>
-                        </div>
-                      </div>
-                      {txPending ? (
-                        <div className="mt-3 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-3 text-xs text-cyan-100">
-                          ⏳ Transaction pending…
-                        </div>
-                      ) : null}
-                    </div>
-
-                    {txActions.length > 0 ? (
-                      <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
-                        <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
-                          Recent on-chain actions
-                        </p>
-                        <div className="mt-3 space-y-2">
-                          {txActions.map((action) => (
-                            <div
-                              key={action.at.getTime()}
-                              className="rounded-2xl border border-lime-400/15 bg-lime-400/5 p-3"
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <p className="text-sm font-medium text-white">{action.label}</p>
-                                <span className="rounded-full border border-lime-400/25 bg-lime-400/10 px-2 py-0.5 text-[11px] text-lime-200">
-                                  {action.ms}ms
-                                </span>
-                              </div>
-                              <p className="mt-1 text-xs text-slate-400">
-                                Tx: {shortenAddress(action.txHash)}
-                                {hasMonadExplorerUrl() ? (
-                                  <> · <a href={explorerTxUrl(action.txHash)} target="_blank" rel="noopener noreferrer" className="text-cyan-300 underline">View on Explorer</a></>
-                                ) : null}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="rounded-3xl border border-white/10 bg-black/20 p-4 text-sm text-slate-400">
-                        No on-chain actions yet. Mint, list, buy, or forge to see Monad confirmation times.
-                      </div>
-                    )}
-                  </div>
-                </Section>
-
-                <Section eyebrow="Profile" title={profile.displayName}>
-                  <div className="space-y-4">
-                    <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
-                      <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
-                        Status feed
-                      </p>
-                      <p className="mt-3 text-sm leading-7 text-slate-200">{status}</p>
-                    </div>
-
-                    <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
-                      <div className="flex items-center justify-between">
-                        <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
-                          Vitality
-                        </p>
-                        <p className="text-sm text-white">
-                          {currentHealth}/{derivedStats?.health}
-                        </p>
-                      </div>
-                      <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-900">
-                        <div
-                          className="h-full rounded-full bg-[linear-gradient(90deg,#b4ff47,#56e5ff)]"
-                          style={{ width: `${healthPercent}%` }}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <StatTile label="Attack" value={derivedStats?.attack ?? 0} />
-                      <StatTile label="Defense" value={derivedStats?.defense ?? 0} />
-                      <StatTile label="Speed" value={derivedStats?.speed ?? 0} />
-                      <StatTile
-                        label="Crit"
-                        value={`${Math.round((derivedStats?.critChance ?? 0) * 100)}%`}
+                <Section eyebrow="Run Feed" title="Status and combat log">
+                  <div className="rounded-[1.5rem] border border-white/10 bg-black/20 p-4">
+                    <p className="text-sm text-slate-300">{status}</p>
+                    <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-lime-400 via-cyan-400 to-fuchsia-400 transition-[width] duration-300"
+                        style={{ width: `${healthPercent}%` }}
                       />
                     </div>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Health track for the current act.
+                    </p>
                   </div>
-                </Section>
 
-                <Section eyebrow="Equipment" title="Current loadout">
-                  <div className="grid gap-3">
-                    {(["weapon", "armor", "artifact", "charm"] as EquipmentSlot[]).map((slot) => {
-                      const slotId = profile.equipped[`${slot}Id` as keyof typeof profile.equipped];
-                      const item = profile.inventory.find((candidate) => candidate.instanceId === slotId);
-
-                      return (
-                        <div
-                          key={slot}
-                          className="rounded-3xl border border-white/10 bg-black/20 p-4"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
-                                {slot}
-                              </p>
-                              <p className="mt-2 text-sm text-white">
-                                {item ? `${item.icon} ${item.name}` : "Empty slot"}
-                              </p>
-                            </div>
-                            {item ? (
-                              <button
-                                type="button"
-                                onClick={() => handleUnequip(slot)}
-                                className="rounded-full border border-white/15 bg-white/8 px-3 py-2 text-xs text-white"
-                              >
-                                Unequip
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </Section>
-
-                <Section eyebrow="Combat Feed" title="Recent events">
-                  <div className="grid gap-3">
+                  <div className="mt-4 space-y-3">
                     {combatLog.map((entry) => (
                       <div
                         key={entry.id}
-                        className={`rounded-3xl border p-4 text-sm ${
+                        className={`rounded-2xl border p-3 text-sm ${
                           entry.tone === "good"
                             ? "border-lime-400/20 bg-lime-400/10 text-lime-100"
                             : entry.tone === "bad"
@@ -1804,19 +1580,132 @@ export function RelicRushApp() {
                   </div>
                 </Section>
 
-                <Section eyebrow="Recent Trades" title="Purchase history">
+                <Section eyebrow="Squad" title="Backup cast on this run">
                   <div className="grid gap-3">
+                    {SQUAD_SPOTLIGHTS.filter(
+                      (spotlight) => spotlight.castName !== PLAYER_HERO_NAME,
+                    ).map((spotlight) => (
+                      <div
+                        key={spotlight.castName}
+                        className="rounded-[1.5rem] border border-white/10 bg-black/20 p-4"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-lg font-semibold text-white">{spotlight.castName}</p>
+                            <p className="mt-1 text-xs uppercase tracking-[0.24em] text-cyan-200">
+                              {spotlight.role}
+                            </p>
+                          </div>
+                          <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-xs text-slate-300">
+                            companion
+                          </span>
+                        </div>
+                        <p className="mt-3 text-sm text-slate-400">{spotlight.vibe}</p>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+
+                <Section eyebrow="Chain Feed" title="Monad activity">
+                  <div className="space-y-3">
+                    {!wallet.address ? (
+                      <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-slate-400">
+                        Wallet disconnected. Reconnect to resume live Monad actions.
+                      </div>
+                    ) : txActions.length === 0 ? (
+                      <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-slate-400">
+                        No on-chain actions yet. Mint, forge, list, or buy to populate this feed.
+                      </div>
+                    ) : (
+                      txActions.map((action) => (
+                        (() => {
+                          const txUrl = explorerTxUrl(action.txHash);
+
+                          return (
+                            <div
+                              key={`${action.txHash}-${action.label}`}
+                              className="rounded-2xl border border-white/10 bg-black/20 p-4"
+                            >
+                              <p className="text-sm font-medium text-white">{action.label}</p>
+                              <p className="mt-1 text-xs text-slate-400">
+                                {action.ms}ms confirmation
+                              </p>
+                              <p className="mt-2 font-mono text-[11px] tracking-wide text-slate-300">
+                                {shortenTxHash(action.txHash)}
+                              </p>
+                              {txUrl ? (
+                                <a
+                                  href={txUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-2 inline-flex text-xs text-cyan-300 underline underline-offset-4"
+                                >
+                                  View transaction
+                                </a>
+                              ) : null}
+                            </div>
+                          );
+                        })()
+                      ))
+                    )}
+                  </div>
+                </Section>
+
+                <Section eyebrow="Equipment" title="Current scene loadout">
+                  <div className="grid gap-3">
+                    {([
+                      ["weapon", profile.equipped.weaponId],
+                      ["armor", profile.equipped.armorId],
+                      ["artifact", profile.equipped.artifactId],
+                      ["charm", profile.equipped.charmId],
+                    ] as Array<[EquipmentSlot, string | null]>).map(([slot, itemId]) => {
+                      const item = profile.inventory.find((entry) => entry.instanceId === itemId) ?? null;
+                      return (
+                        <div
+                          key={slot}
+                          className="rounded-[1.5rem] border border-white/10 bg-black/20 p-4"
+                        >
+                          <div className="flex items-center justify-between gap-4">
+                            <div>
+                              <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
+                                {slot}
+                              </p>
+                              <p className="mt-2 text-sm text-white">
+                                {item ? item.name : "Empty slot"}
+                              </p>
+                            </div>
+                            {item ? (
+                              <button
+                                type="button"
+                                onClick={() => handleUnequip(slot)}
+                                className="rounded-full border border-white/10 bg-white/8 px-3 py-2 text-xs text-slate-300"
+                              >
+                                Unequip
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Section>
+
+                <Section eyebrow="Receipts" title="Recent purchases">
+                  <div className="space-y-3">
                     {purchaseHistory.length === 0 ? (
-                      <div className="rounded-3xl border border-white/10 bg-black/20 p-4 text-sm text-slate-400">
+                      <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-slate-400">
                         No purchases yet. Hunt a premium relic or buy one from the bazaar.
                       </div>
                     ) : (
                       purchaseHistory.map((record) => (
                         <div
                           key={record.id}
-                          className="rounded-3xl border border-white/10 bg-black/20 p-4 text-sm text-slate-300"
+                          className="rounded-2xl border border-white/10 bg-black/20 p-4"
                         >
-                          Bought {record.itemName} for {formatMon(record.priceWei)} MON
+                          <p className="text-sm font-medium text-white">{record.itemName}</p>
+                          <p className="mt-1 text-xs text-slate-400">
+                            {formatMon(record.priceWei)} MON • {new Date(record.purchasedAt).toLocaleString()}
+                          </p>
                         </div>
                       ))
                     )}
@@ -1825,6 +1714,20 @@ export function RelicRushApp() {
               </div>
             </div>
           </>
+        ) : !wallet.address ? (
+          <WalletGatePanel
+            onConnectWallet={() => void handleConnectWallet()}
+          />
+        ) : (
+          <HeroBootstrapPanels
+            apiBusy={apiBusy}
+            wallet={wallet}
+            onCreateProfile={() => void handleCreateProfile()}
+            playerBlueprint={playerBlueprint}
+            squadSpotlights={SQUAD_SPOTLIGHTS.filter(
+              (spotlight) => spotlight.castName !== PLAYER_HERO_NAME,
+            )}
+          />
         )}
       </div>
       {/* Toasts overlay */}
@@ -1844,9 +1747,14 @@ export function RelicRushApp() {
               {toast.type === "pending" && "⏳ "}
               {toast.type === "success" && "✅ "}
               {toast.type === "error" && "❌ "}
-              {toast.message}
+              <div>{toast.message}</div>
+              {toast.txHash ? (
+                <div className="mt-2 font-mono text-[11px] tracking-wide text-white/70">
+                  {shortenTxHash(toast.txHash)}
+                </div>
+              ) : null}
             </div>
-            {toast.txHash && hasMonadExplorerUrl() && (
+            {toast.txHash ? (
               <a
                 href={getMonadExplorerTxUrl(toast.txHash)}
                 target="_blank"
@@ -1855,7 +1763,7 @@ export function RelicRushApp() {
               >
                 View Tx
               </a>
-            )}
+            ) : null}
             <button
               onClick={() => setToasts((current) => current.filter((t) => t.id !== toast.id))}
               className="ml-2 text-white/40 hover:text-white"

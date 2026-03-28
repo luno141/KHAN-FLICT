@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(snapshot);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load profile.";
-    return NextResponse.json({ error: message }, { status: 404 });
+    const status = message === "Player profile not found." ? 404 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }
