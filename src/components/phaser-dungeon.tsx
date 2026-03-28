@@ -1444,7 +1444,7 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
 
   return (
     <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#050816]/80 shadow-[0_0_90px_rgba(86,229,255,0.08)]">
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between px-4 py-3">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-wrap items-center justify-between gap-2 px-4 py-3">
         <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-[11px] uppercase tracking-[0.28em] text-cyan-200">
           Asset Dungeon
         </span>
@@ -1453,7 +1453,7 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
         </span>
       </div>
       {sceneBootState !== "ready" ? (
-        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[#050816]/70">
+        <div className="pointer-events-none absolute inset-x-4 bottom-4 top-14 z-20 flex items-center justify-center rounded-[1.5rem] bg-[#050816]/70">
           <div className="rounded-3xl border border-white/10 bg-black/40 px-5 py-4 text-center text-sm text-slate-200 backdrop-blur">
             {sceneBootState === "booting"
               ? "Booting the dungeon scene..."
@@ -1461,7 +1461,14 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
           </div>
         </div>
       ) : null}
-      <div ref={containerRef} className="aspect-[5/3] w-full min-h-[420px]" />
+      <div className="px-4 pb-4 pt-14">
+        <div className="overflow-hidden rounded-[1.5rem] border border-white/10 bg-[#08101d]">
+          <div
+            ref={containerRef}
+            className="aspect-[5/3] w-full min-h-[420px] [&>canvas]:block"
+          />
+        </div>
+      </div>
     </div>
   );
 }
