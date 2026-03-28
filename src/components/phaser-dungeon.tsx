@@ -10,9 +10,16 @@ import {
   rarityColor,
 } from "@/src/game/helpers";
 import {
+  buildMapMetrics,
   buildSafeDungeon,
+  buildWalkableGrid,
+  getLayerRenderBand,
+  getTilesetForGid,
   MAP_TILE_SIZE,
   mergeCollisionGrid,
+  parseMapLayers,
+  resolveEncounterLayout,
+  type TileLayer,
   type MapMetrics,
 } from "@/src/game/dungeon/map";
 import {
@@ -30,6 +37,7 @@ import type {
   LootRollContext,
   StatBlock,
 } from "@/src/game/types";
+import { getUiErrorMessage } from "@/src/lib/ui-error";
 
 type PhaserDungeonProps = {
   active: boolean;
@@ -100,20 +108,7 @@ const DIRECTIONAL_ENEMY_PACK: Partial<Record<
     scale: number;
     label: string;
   }
->> = {
-  slime: {
-    key: "chota-pandit",
-    mode: "directional-static",
-    scale: 0.92,
-    label: "Chota Pandit",
-  },
-  skeleton: {
-    key: "salman",
-    mode: "directional-walk",
-    scale: 0.94,
-    label: "Salman Khan",
-  },
-};
+>> = {};
 
 const DIRECTION_ORDER: Direction8[] = [
   "north",
@@ -128,14 +123,14 @@ const DIRECTION_ORDER: Direction8[] = [
 
 const COMPANION_CAST = [
   {
-    id: "abhishek-bachchan",
-    name: "Abhishek Bachchan",
+    id: "shade-runner",
+    name: "Shade Runner",
     packKey: PLAYER_PACK.Rogue,
     slot: "left",
   },
   {
-    id: "amitabh-bachchan",
-    name: "Amitabh Bachchan",
+    id: "ember-scholar",
+    name: "Ember Scholar",
     packKey: PLAYER_PACK.Mage,
     slot: "right",
   },
@@ -150,7 +145,7 @@ const PLAYER_SHEET_CONFIG = { frameWidth: 96, frameHeight: 96 };
 const ENEMY_SHEET_CONFIG = { frameWidth: 128, frameHeight: 128 };
 
 export function PhaserDungeon(props: PhaserDungeonProps) {
-  return <FallbackDungeon {...props} />;
+  return <ExperimentalPhaserDungeon {...props} />;
 }
 
 function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
@@ -235,10 +230,6 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
 
         preload() {
           this.load.text("relic-rush-tmx", "/assets/relic-rush/tiles/Undead_land.tmx");
-          this.load.image(
-            "khan-flict-scene-backdrop",
-            "/assets/khan-flict/scenes/dungeon-backdrop.png",
-          );
           this.load.spritesheet(
             "tiles-ground",
             "/assets/relic-rush/tiles/Ground_rocks.png",
@@ -340,26 +331,6 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
               ENEMY_SHEET_CONFIG,
             );
           }
-
-          for (const direction of DIRECTION_ORDER) {
-            this.load.image(
-              `salman-idle-${direction}`,
-              `/assets/khan-flict/characters/salman/rotations/${direction}.png`,
-            );
-            this.load.image(
-              `chota-pandit-idle-${direction}`,
-              `/assets/khan-flict/characters/chota-pandit/rotations/${direction}.png`,
-            );
-
-            for (let frame = 0; frame < 4; frame += 1) {
-              this.load.image(
-                `salman-walk-${direction}-${frame}`,
-                `/assets/khan-flict/characters/salman/animations/walking-4-frames/${direction}/frame_${frame
-                  .toString()
-                  .padStart(3, "0")}.png`,
-              );
-            }
-          }
         }
 
         create() {
@@ -367,9 +338,28 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
             this.cameras.main.setBackgroundColor(palette.bg);
             this.buildTextures(palette);
             this.createAnimations();
-            const authoredDungeon = buildSafeDungeon(SCENE_WIDTH, SCENE_HEIGHT);
-            this.mapMetrics = authoredDungeon.metrics;
-            this.walkableGrid = authoredDungeon.walkableGrid;
+            const fallbackDungeon = buildSafeDungeon(SCENE_WIDTH, SCENE_HEIGHT);
+            const mapRaw = this.cache.text.get("relic-rush-tmx") as string | undefined;
+            const parsedLayers = parseMapLayers(mapRaw);
+            const authoredLayers = parsedLayers.filter((layer) =>
+              layer.chunks.some((chunk) => chunk.gids.some((gid) => gid > 0)),
+            );
+            const authoredMetrics =
+              authoredLayers.length > 0
+                ? buildMapMetrics(authoredLayers, SCENE_WIDTH, SCENE_HEIGHT)
+                : fallbackDungeon.metrics;
+            const authoredWalkableGrid =
+              authoredLayers.length > 0
+                ? buildWalkableGrid(authoredLayers, authoredMetrics)
+                : fallbackDungeon.walkableGrid;
+            const hasWalkableTiles = authoredWalkableGrid.some((row) =>
+              row.some(Boolean),
+            );
+
+            this.mapMetrics = hasWalkableTiles ? authoredMetrics : fallbackDungeon.metrics;
+            this.walkableGrid = hasWalkableTiles
+              ? authoredWalkableGrid
+              : fallbackDungeon.walkableGrid;
             this.physics.world.setBounds(
               this.mapMetrics.originX,
               this.mapMetrics.originY,
@@ -378,9 +368,16 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
             );
             this.renderSceneBackdrop();
             this.buildArenaFrame(palette, this.mapMetrics);
-            this.renderSafeDungeonMap(this.walkableGrid, this.mapMetrics);
+            if (hasWalkableTiles && authoredLayers.length > 0) {
+              this.renderAuthoredDungeonMap(authoredLayers, this.mapMetrics);
+            } else {
+              this.renderSafeDungeonMap(this.walkableGrid, this.mapMetrics);
+            }
             this.blockers = this.buildCollisionBodies(this.walkableGrid, this.mapMetrics);
-            const encounterLayout = authoredDungeon.encounterLayout;
+            const encounterLayout =
+              hasWalkableTiles && authoredLayers.length > 0
+                ? resolveEncounterLayout(this.walkableGrid, this.mapMetrics)
+                : fallbackDungeon.encounterLayout;
 
             const playerPack = PLAYER_PACK[callbacksRef.current.archetype];
             this.playerShadow = this.add
@@ -406,8 +403,11 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
             this.player.anims.play(`${playerPack}-idle`, true);
             this.lastHeading.set(1, 0);
             this.physics.add.collider(this.player, this.blockers);
-            this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+            this.cameras.main.stopFollow();
+            this.cameras.main.setScroll(0, 0);
+            this.cameras.main.centerOn(SCENE_WIDTH / 2, SCENE_HEIGHT / 2);
             this.cameras.main.setZoom(1.02);
+            this.cameras.main.roundPixels = true;
             this.squadFollowers = this.spawnCompanions(
               encounterLayout.player.x,
               encounterLayout.player.y,
@@ -511,8 +511,10 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
             }
             setSceneBootState("ready");
           } catch (error) {
-            const message =
-              error instanceof Error ? error.message : "Dungeon scene failed to start.";
+            const message = getUiErrorMessage(
+              error,
+              "Dungeon scene failed to start.",
+            );
             setSceneError(message);
             setSceneBootState("error");
             setUseSafeMode(true);
@@ -696,16 +698,13 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
         }
 
         private renderSceneBackdrop() {
-          const backdrop = this.add.image(
-            SCENE_WIDTH / 2,
-            SCENE_HEIGHT / 2,
-            "khan-flict-scene-backdrop",
-          );
-          backdrop
-            .setDisplaySize(SCENE_WIDTH, SCENE_HEIGHT)
-            .setDepth(0)
-            .setAlpha(0.22)
-            .setScrollFactor(0.72, 0.72);
+          const haze = this.add.graphics().setDepth(0);
+          haze.fillGradientStyle(0x08111f, 0x10192c, 0x040814, 0x040814, 1, 1, 1, 1);
+          haze.fillRect(0, 0, SCENE_WIDTH, SCENE_HEIGHT);
+          haze.fillStyle(0x22c55e, 0.05);
+          haze.fillEllipse(160, 96, 240, 140);
+          haze.fillStyle(0x60a5fa, 0.05);
+          haze.fillEllipse(SCENE_WIDTH - 180, SCENE_HEIGHT - 110, 260, 160);
         }
 
         private buildTextures(paletteValues: typeof palette) {
@@ -768,17 +767,6 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
             this.ensureAnimation(`${packKey}-hurt`, `${packKey}-hurt`, 0, 5, 14, 0);
             this.ensureAnimation(`${packKey}-dead`, `${packKey}-dead`, 0, 2, 8, 0);
           }
-
-          for (const direction of DIRECTION_ORDER) {
-            this.ensureImageSequenceAnimation(
-              `salman-walk-${direction}`,
-              Array.from({ length: 4 }, (_, frame) => ({
-                key: `salman-walk-${direction}-${frame}`,
-              })),
-              8,
-              -1,
-            );
-          }
         }
 
         private ensureAnimation(
@@ -827,6 +815,58 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
             frameRate,
             repeat,
           });
+        }
+
+        private renderAuthoredDungeonMap(layers: TileLayer[], metrics: MapMetrics) {
+          const plate = this.add.graphics().setDepth(2);
+          plate.fillStyle(0x08101d, 1);
+          plate.fillRoundedRect(metrics.originX, metrics.originY, metrics.widthPx, metrics.heightPx, 18);
+
+          for (const layer of layers) {
+            const renderBand = getLayerRenderBand(layer.name);
+            const depthBase =
+              renderBand === "background" ? 4 : renderBand === "midground" ? 14 : 26;
+
+            for (const chunk of layer.chunks) {
+              chunk.gids.forEach((gid, index) => {
+                if (!gid) {
+                  return;
+                }
+
+                const tileset = getTilesetForGid(gid);
+                if (!tileset) {
+                  return;
+                }
+
+                const tileX = chunk.x + (index % chunk.width);
+                const tileY = chunk.y + Math.floor(index / chunk.width);
+                const localX = tileX - metrics.minX;
+                const localY = tileY - metrics.minY;
+
+                if (
+                  localX < 0 ||
+                  localY < 0 ||
+                  localX >= metrics.widthTiles ||
+                  localY >= metrics.heightTiles
+                ) {
+                  return;
+                }
+
+                this.add
+                  .image(
+                    metrics.originX + localX * MAP_TILE_SIZE + MAP_TILE_SIZE / 2,
+                    metrics.originY + localY * MAP_TILE_SIZE + MAP_TILE_SIZE / 2,
+                    tileset.textureKey,
+                    gid - tileset.firstGid,
+                  )
+                  .setDepth(depthBase + localY * 0.02);
+              });
+            }
+          }
+
+          const border = this.add.graphics().setDepth(28.5);
+          border.lineStyle(2, 0xcbd5e1, 0.08);
+          border.strokeRoundedRect(metrics.originX, metrics.originY, metrics.widthPx, metrics.heightPx, 18);
         }
 
         private renderSafeDungeonMap(grid: boolean[][], metrics: MapMetrics) {
@@ -1372,8 +1412,7 @@ function ExperimentalPhaserDungeon(props: PhaserDungeonProps) {
         });
       })
       .catch((error) => {
-        const message =
-          error instanceof Error ? error.message : "Phaser failed to load.";
+        const message = getUiErrorMessage(error, "Phaser failed to load.");
         setSceneError(message);
         setSceneBootState("error");
         setUseSafeMode(true);

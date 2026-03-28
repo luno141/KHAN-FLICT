@@ -7,31 +7,31 @@ import type {
 } from "@/src/game/types";
 import { ITEM_ICON_ASSETS } from "@/src/game/items";
 
-export const GAME_TITLE = "KHAN-FLICT";
-export const DUNGEON_NAME = "Salman's Gym-Powered Dungeon";
+export const GAME_TITLE = "Relic Rush";
+export const DUNGEON_NAME = "Undead Mire Vault";
 export const PLAYER_ARCHETYPE: Archetype = "Warrior";
-export const PLAYER_HERO_NAME = "Shah Rukh Khan";
+export const PLAYER_HERO_NAME = "Vault Warden";
 export const HERO_HOOK =
-  "Shah Rukh Khan dives into a cursed dungeon to rescue Aishwarya Rai, out-talk Salman Khan, and somehow survive a black armored car boss phase.";
+  "Connect your wallet, breach the vault, and clear a fast relic run through the undead mire.";
 
 export const STORY_BEATS = [
   {
-    eyebrow: "Prologue",
-    title: "The Most Unnecessary Kidnapping Ever",
+    eyebrow: "Breach",
+    title: "The Marsh Opened First",
     detail:
-      "Salman Khan kidnapped Aishwarya Rai, crowned himself final boss, and turned Filmygarh into a cursed dungeon with pure gym-bro menace.",
+      "An old vault cracked beneath the swamp and spilled slimes, cursewater, and relic energy into the ruins.",
   },
   {
     eyebrow: "Squad",
-    title: "Unbalanced On Purpose",
+    title: "Three Specialists, One Route",
     detail:
-      "SRK handles style and relic momentum, Amitabh weaponizes narration, and Abhishek solves every room with more bullets than logic.",
+      "The Warden holds the line, the Shade Runner hunts angles, and the Ember Scholar turns relic scraps into live firepower.",
   },
   {
-    eyebrow: "Finale",
-    title: "Black SUV Destruction Derby",
+    eyebrow: "Extract",
+    title: "Grab The Core And Get Out",
     detail:
-      "Every floor escalates until Salman summons an armored car, rage mode triggers, and the dungeon itself becomes the boss arena.",
+      "Every room is a sprint for better drops, stronger loadouts, and one more clean escape through the vault gate.",
   },
 ] as const;
 
@@ -43,41 +43,43 @@ export const SQUAD_SPOTLIGHTS: Array<{
 }> = [
   {
     archetype: "Warrior",
-    castName: "Shah Rukh Khan",
-    role: "Smooth-talking relic hunter",
+    castName: "Vault Warden",
+    role: "Frontline relic breaker",
     vibe:
-      "Wins fights with timing, swagger, and one-liners that somehow buff damage.",
+      "Balanced, durable, and built to push into the room first without losing tempo.",
   },
   {
     archetype: "Rogue",
-    castName: "Abhishek Bachchan",
-    role: "Dual-pistol bullet storm gremlin",
+    castName: "Shade Runner",
+    role: "High-speed flanker",
     vibe:
-      "Fastest in the squad, lowest patience, and permanently convinced that more bullets is a strategy.",
+      "Crit-heavy skirmisher tuned for quick pivots, loot pressure, and fast cleanups.",
   },
   {
     archetype: "Mage",
-    castName: "Amitabh Bachchan",
-    role: "Wise savage narrator",
+    castName: "Ember Scholar",
+    role: "Glyph-burst caster",
     vibe:
-      "Turns relics into speeches, enemies into listeners, and every room into a dramatic moral lesson.",
+      "Turns cursed relic residue into precision damage and scales hardest with rare drops.",
   },
 ] as const;
 
 export const FLOOR_PREVIEW = [
-  "Floor 1: Tutorial where everyone still overacts before attacking.",
-  "Floor 2: Meme relics appear, including sunglasses that boost charisma but not damage.",
-  "Floor 3: Plot-hole corridor with trap spikes, sudden explosions, and optional logic.",
-  "Floor 4: Rajpal Yadav trickster phase with stabbing, fleeing, and re-entry nonsense.",
-  "Final Arena: Salman rage mode, armored car chaos, and cinematic overkill.",
+  "Bog entry: scout the route",
+  "Ruin hall: first pressure wave",
+  "Bone bridge: elite slime push",
+  "Vault antechamber: premium relic chance",
+  "Core seal: clear and extract",
 ] as const;
 
 export const ARCHETYPES: Record<Archetype, CharacterBlueprint> = {
   Warrior: {
     archetype: "Warrior",
-    title: "SRK, King of Slow-Mo",
-    signature: "Balanced duelist with smooth dodges, dramatic finishers, and charm-heavy survivability.",
-    lore: "Slides into cursed corridors like every dungeon was written for his entrance shot.",
+    title: "Vault Warden, Frontline Breacher",
+    signature:
+      "Balanced duelist with strong sustain, stable damage, and the best first-room safety.",
+    lore:
+      "Built to survive bad angles, claim the lane, and drag the team through collapsing ruins.",
     baseStats: {
       health: 124,
       attack: 16,
@@ -89,9 +91,11 @@ export const ARCHETYPES: Record<Archetype, CharacterBlueprint> = {
   },
   Rogue: {
     archetype: "Rogue",
-    title: "Abhishek, Bullet Economy Destroyer",
-    signature: "Fastest class, highest crit pressure, and absolutely no respect for ammo conservation.",
-    lore: "Treats every ambush like a music video with more muzzle flash than planning.",
+    title: "Shade Runner, Ruin Flanker",
+    signature:
+      "Fastest class, strongest crit spikes, and the cleanest relic farming tempo.",
+    lore:
+      "A vault ghost who slips through pressure points and turns panic into momentum.",
     baseStats: {
       health: 92,
       attack: 14,
@@ -103,9 +107,11 @@ export const ARCHETYPES: Record<Archetype, CharacterBlueprint> = {
   },
   Mage: {
     archetype: "Mage",
-    title: "Amitabh, Living Monologue Engine",
-    signature: "Highest burst and relic scaling, with the calm confidence of someone narrating everyone else's mistakes.",
-    lore: "Makes cursed artifacts behave simply by sounding disappointed in them.",
+    title: "Ember Scholar, Glyph Breaker",
+    signature:
+      "Highest burst and best relic scaling, with enough utility to stabilize any messy run.",
+    lore:
+      "Reads the ruin faster than anyone else and weaponizes every cursed pattern it finds.",
     baseStats: {
       health: 84,
       attack: 18,
@@ -118,12 +124,12 @@ export const ARCHETYPES: Record<Archetype, CharacterBlueprint> = {
 };
 
 export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
-  "rock": {
+  rock: {
     templateId: "rock",
-    name: "Method Actor Brick",
+    name: "Stone Fragment",
     type: "charm",
     slot: "charm",
-    description: "A prop that somehow survived editing. Heavy, useless, emotionally committed.",
+    description: "A chipped shard from the vault floor. Crude, dense, and still oddly lucky.",
     icon: ITEM_ICON_ASSETS.rock,
     baseValue: 1,
     premium: false,
@@ -132,10 +138,10 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
   },
   "wooden-sword": {
     templateId: "wooden-sword",
-    name: "Prop Sword",
+    name: "Bone Knife",
     type: "weapon",
     slot: "weapon",
-    description: "Looks dangerous on camera, less so in reality.",
+    description: "Cut from old remains and sharpened for quick dirty work in tight rooms.",
     icon: ITEM_ICON_ASSETS["wooden-sword"],
     baseValue: 3,
     premium: false,
@@ -144,10 +150,10 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
   },
   "vanguard-blade": {
     templateId: "vanguard-blade",
-    name: "Signature Pose Saber",
+    name: "Crystal Edge",
     type: "weapon",
     slot: "weapon",
-    description: "Built for clean openings, perfect parries, and dramatic close-ups.",
+    description: "A relic blade grown straight from the mire wall. Stable, sharp, and bright.",
     icon: ITEM_ICON_ASSETS["vanguard-blade"],
     baseValue: 18,
     premium: false,
@@ -156,11 +162,11 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
   },
   "whisper-daggers": {
     templateId: "whisper-daggers",
-    name: "Bullet Baarish Pistols",
+    name: "Skullburst Knives",
     type: "weapon",
     slot: "weapon",
-    description: "Dual hand cannons that reward reckless confidence and impossible reload timing.",
-    icon: "🔫",
+    description: "Twin throwers built for hit-and-fade pressure and greedy crit fishing.",
+    icon: ITEM_ICON_ASSETS["whisper-daggers"],
     baseValue: 22,
     premium: false,
     baseBonuses: { attack: 3, speed: 2, critChance: 0.04 },
@@ -168,11 +174,11 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
   },
   "ember-staff": {
     templateId: "ember-staff",
-    name: "Monologue Conductor",
+    name: "Mire Scepter",
     type: "weapon",
     slot: "weapon",
-    description: "A narration staff that makes relics listen and villains question their life choices.",
-    icon: "🪄",
+    description: "A crystal focus that turns damp cursewater into clean ranged burst.",
+    icon: ITEM_ICON_ASSETS["ember-staff"],
     baseValue: 24,
     premium: false,
     baseBonuses: { attack: 5, luck: 1 },
@@ -180,10 +186,10 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
   },
   duskmail: {
     templateId: "duskmail",
-    name: "Slow-Mo Leather Coat",
+    name: "Ruin Plate",
     type: "armor",
     slot: "armor",
-    description: "The coat alone adds 20 percent more hero framing.",
+    description: "Salvaged vault plating that trades elegance for surviving one more room.",
     icon: ITEM_ICON_ASSETS.duskmail,
     baseValue: 20,
     premium: false,
@@ -192,10 +198,10 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
   },
   "ember-charm": {
     templateId: "ember-charm",
-    name: "Hero Sunglasses",
+    name: "Gate Sigil",
     type: "charm",
     slot: "charm",
-    description: "Boosts aura, attitude, and the illusion that charisma is a combat stat.",
+    description: "A skull-marked seal that hums louder the closer you get to the vault core.",
     icon: ITEM_ICON_ASSETS["ember-charm"],
     baseValue: 16,
     premium: false,
@@ -204,9 +210,9 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
   },
   moonbrew: {
     templateId: "moonbrew",
-    name: "Masala Energy Flask",
+    name: "Dewglass Tonic",
     type: "consumable",
-    description: "Restores health, swagger, and the ability to keep talking mid-fight.",
+    description: "Distilled mire bloom that patches wounds and gets you moving again.",
     icon: ITEM_ICON_ASSETS.moonbrew,
     baseValue: 14,
     premium: false,
@@ -216,10 +222,10 @@ export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
   },
   "starforged-idol": {
     templateId: "starforged-idol",
-    name: "Aishwarya Memory Relic",
+    name: "Lich Crown Relic",
     type: "artifact",
     slot: "artifact",
-    description: "A premium artifact tied to the heart of the dungeon and absolutely too dramatic to ignore.",
+    description: "A premium relic pulled from the deepest seal, pulsing with old vault authority.",
     icon: ITEM_ICON_ASSETS["starforged-idol"],
     baseValue: 80,
     premium: true,
@@ -239,7 +245,7 @@ export const ENEMY_THEME: Record<
   { name: string; color: number; health: number; attack: number; defense: number; speed: number }
 > = {
   slime: {
-    name: "Chota Pandit",
+    name: "Green Slime",
     color: 0x4ade80,
     health: 34,
     attack: 7,
@@ -247,16 +253,16 @@ export const ENEMY_THEME: Record<
     speed: 3,
   },
   skeleton: {
-    name: "Salman Khan",
-    color: 0xe5e7eb,
+    name: "Blue Slime",
+    color: 0x60a5fa,
     health: 46,
     attack: 10,
     defense: 4,
     speed: 5,
   },
   wisp: {
-    name: "SUV Spirit",
-    color: 0x60a5fa,
+    name: "Red Slime",
+    color: 0xf87171,
     health: 28,
     attack: 12,
     defense: 1,
@@ -266,25 +272,25 @@ export const ENEMY_THEME: Record<
 
 export const MOCK_PVP_OPPONENTS: PvpOpponent[] = [
   {
-    id: "pvp-sable",
-    name: "Nawaz, Shadow Strategist",
+    id: "pvp-fen-stalker",
+    name: "Fen Stalker",
     archetype: "Rogue",
     combatPower: 77,
-    note: "Stealth-heavy rival who punishes panic and exposes weak timing.",
+    note: "A fast rival build that punishes slow opens and weak crit resistance.",
   },
   {
-    id: "pvp-warden",
-    name: "Ranveer, Berserker of Bad Plans",
+    id: "pvp-ruin-sentinel",
+    name: "Ruin Sentinel",
     archetype: "Warrior",
     combatPower: 82,
-    note: "A loud bruiser who gets stronger as the room gets messier.",
+    note: "Frontline bruiser tuned to outlast sloppy loadouts and win the long trade.",
   },
   {
-    id: "pvp-lyra",
-    name: "Deepika, Precision Assassin",
+    id: "pvp-ash-cipher",
+    name: "Ash Cipher",
     archetype: "Mage",
     combatPower: 80,
-    note: "A boss-killer tuned to punish sloppy positioning and weak artifact builds.",
+    note: "Burst-heavy caster built to expose weak artifact scaling and poor positioning.",
   },
 ];
 

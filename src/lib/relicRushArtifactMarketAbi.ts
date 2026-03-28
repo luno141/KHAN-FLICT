@@ -130,6 +130,11 @@ export const RELIC_RUSH_ARTIFACT_MARKET_ABI = [
   },
   {
     "inputs": [],
+    "name": "MintRecipientMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "NotApprovedForMarket",
     "type": "error"
   },

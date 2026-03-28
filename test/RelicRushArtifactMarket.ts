@@ -14,7 +14,7 @@ describe("RelicRushArtifactMarket", function () {
 
     await expect(
       market
-        .connect(deployer)
+        .connect(seller)
         .mintPremiumArtifact(
           seller.address,
           "artifact-starforged-idol-1",
@@ -57,7 +57,7 @@ describe("RelicRushArtifactMarket", function () {
     await market.waitForDeployment();
 
     await market
-      .connect(deployer)
+      .connect(seller)
       .mintPremiumArtifact(
         seller.address,
         "artifact-ember-crown-1",
@@ -73,5 +73,25 @@ describe("RelicRushArtifactMarket", function () {
     const listing = await market.listings(1n);
     expect(listing.active).to.equal(false);
     expect(await market.ownerOf(1n)).to.equal(seller.address);
+  });
+
+  it("reverts if a wallet tries to mint to someone else", async function () {
+    const { ethers } = await network.connect();
+    const [deployer, seller, buyer] = await ethers.getSigners();
+
+    const market = await ethers.deployContract("RelicRushArtifactMarket", [
+      deployer.address,
+    ]);
+    await market.waitForDeployment();
+
+    await expect(
+      market
+        .connect(seller)
+        .mintPremiumArtifact(
+          buyer.address,
+          "artifact-illegal-redirect-1",
+          "ipfs://illegal-redirect-1",
+        ),
+    ).to.be.revertedWithCustomError(market, "MintRecipientMismatch");
   });
 });

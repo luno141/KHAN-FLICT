@@ -10,6 +10,7 @@ contract RelicRushArtifactMarket is ERC721URIStorage, Ownable, ReentrancyGuard {
     error ArtifactAlreadyMinted();
     error InvalidPrice();
     error ListingInactive();
+    error MintRecipientMismatch();
     error NotApprovedForMarket();
     error NotTokenOwner();
     error PayoutFailed();
@@ -56,8 +57,9 @@ contract RelicRushArtifactMarket is ERC721URIStorage, Ownable, ReentrancyGuard {
         address to,
         string calldata artifactId,
         string calldata tokenURI
-    ) external onlyOwner returns (uint256 tokenId) {
+    ) external returns (uint256 tokenId) {
         if (tokenIdByArtifactId[artifactId] != 0) revert ArtifactAlreadyMinted();
+        if (to != msg.sender) revert MintRecipientMismatch();
 
         tokenId = nextTokenId;
         nextTokenId += 1;

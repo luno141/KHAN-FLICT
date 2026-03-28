@@ -1,13 +1,15 @@
 import type { InventoryItem } from "@/src/game/types";
 
 export const ITEM_ICON_ASSETS: Record<string, string> = {
-  rock: "/assets/khan-flict/items/rock.png",
-  "wooden-sword": "/assets/khan-flict/items/stick.png",
-  "vanguard-blade": "/assets/khan-flict/items/trident.png",
-  duskmail: "/assets/khan-flict/items/hat1.png",
-  "ember-charm": "/assets/khan-flict/items/swag.png",
-  moonbrew: "/assets/khan-flict/items/pot.png",
-  "starforged-idol": "/assets/khan-flict/items/bhramastra.png",
+  rock: "/assets/relic-rush/items/stone-fragment.png",
+  "wooden-sword": "/assets/relic-rush/items/bone-knife.png",
+  "vanguard-blade": "/assets/relic-rush/items/crystal-edge.png",
+  "whisper-daggers": "/assets/relic-rush/items/skullburst-knives.png",
+  "ember-staff": "/assets/relic-rush/items/mire-scepter.png",
+  duskmail: "/assets/relic-rush/items/ruin-plate.png",
+  "ember-charm": "/assets/relic-rush/items/gate-sigil.png",
+  moonbrew: "/assets/relic-rush/items/dewglass-tonic.png",
+  "starforged-idol": "/assets/relic-rush/items/lich-crown.png",
 };
 
 export function resolveItemIcon(

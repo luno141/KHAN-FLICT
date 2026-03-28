@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DUNGEON_NAME, ENEMY_THEME, PLAYER_HERO_NAME } from "@/src/game/content";
-import { calculateDamage, createLog } from "@/src/game/helpers";
-import { resolveItemIcon } from "@/src/game/items";
+import { calculateDamage, createId, createLog } from "@/src/game/helpers";
+import { isAssetIcon, resolveItemIcon } from "@/src/game/items";
 import { buildSafeDungeon } from "@/src/game/dungeon/map";
 import type {
   Archetype,
@@ -54,18 +54,28 @@ type LootState = {
 
 const TILE_SIZE = 28;
 
-const PLAYER_ASSET_ROOT = "/assets/khan-flict/characters/shahrukh-khan/rotations";
-const ABHISHEK_ASSET_ROOT = "/assets/khan-flict/characters/abhishek/rotations";
-const AMITABH_ASSET_ROOT = "/assets/khan-flict/characters/amitabh/rotations";
-const SALMAN_ASSET_ROOT = "/assets/khan-flict/characters/salman/rotations";
-const CHOTA_PANDIT_ASSET_ROOT = "/assets/khan-flict/characters/chota-pandit/rotations";
-const SCENE_IMAGE = "/assets/khan-flict/scenes/dungeon-stage.png";
-const SCENE_IMAGE_ALT = "/assets/khan-flict/scenes/dungeon-stage-alt.png";
+const PLAYER_SHEETS = {
+  Warrior: "/assets/relic-rush/characters/warrior-1",
+  Rogue: "/assets/relic-rush/characters/warrior-2",
+  Mage: "/assets/relic-rush/characters/warrior-3",
+} as const satisfies Record<Archetype, string>;
+
+const ENEMY_SHEETS: Record<EnemyType, string> = {
+  slime: "/assets/relic-rush/enemies/green-slime",
+  skeleton: "/assets/relic-rush/enemies/blue-slime",
+  wisp: "/assets/relic-rush/enemies/red-slime",
+};
 
 const COMPANION_LAYOUT = [
-  { name: "Abhishek", dx: -0.8, dy: 0.15, assetRoot: ABHISHEK_ASSET_ROOT },
-  { name: "Amitabh", dx: 0.82, dy: 0.05, assetRoot: AMITABH_ASSET_ROOT },
+  { name: "Shade Runner", dx: -0.8, dy: 0.15, sheetRoot: PLAYER_SHEETS.Rogue },
+  { name: "Ember Scholar", dx: 0.82, dy: 0.05, sheetRoot: PLAYER_SHEETS.Mage },
 ] as const;
+
+const PLAYER_FRAME = { width: 96, height: 96 };
+const ENEMY_FRAME = { width: 128, height: 128 };
+const PORTAL_ICON = "/assets/relic-rush/items/gate-sigil.png";
+const SCENE_TILE_SHEET = "/assets/relic-rush/tiles/Ground_rocks.png";
+const SCENE_OBJECT_SHEET = "/assets/relic-rush/tiles/Objects.png";
 
 function getDirectionFromDelta(dx: number, dy: number): FacingDirection {
   if (dx === 0 && dy < 0) return "north";
@@ -83,14 +93,60 @@ function directionFromMove(from: TilePoint, to: TilePoint): FacingDirection {
   return getDirectionFromDelta(to.x - from.x, to.y - from.y);
 }
 
-function getAssetForDirection(assetRoot: string, direction: FacingDirection) {
-  return `${assetRoot}/${direction}.png`;
+function isFacingLeft(direction: FacingDirection) {
+  return direction === "west" || direction === "north-west" || direction === "south-west";
+}
+
+function scheduleUiUpdate(task: () => void) {
+  if (typeof queueMicrotask === "function") {
+    queueMicrotask(task);
+    return;
+  }
+
+  window.setTimeout(task, 0);
+}
+
+function SpriteStrip({
+  src,
+  frameWidth,
+  frameHeight,
+  frameCount,
+  frameIndex,
+  width,
+  height,
+  flipX = false,
+  className,
+}: {
+  src: string;
+  frameWidth: number;
+  frameHeight: number;
+  frameCount: number;
+  frameIndex: number;
+  width: number;
+  height: number;
+  flipX?: boolean;
+  className?: string;
+}) {
+  const style: CSSProperties = {
+    width,
+    height,
+    backgroundImage: `url(${src})`,
+    backgroundRepeat: "no-repeat",
+    backgroundPosition: `-${(frameIndex % frameCount) * frameWidth}px 0`,
+    backgroundSize: `${frameWidth * frameCount}px ${frameHeight}px`,
+    imageRendering: "pixelated",
+    transform: flipX ? "scaleX(-1)" : undefined,
+    transformOrigin: "center",
+  };
+
+  return <div className={className} style={style} aria-hidden="true" />;
 }
 
 export function FallbackDungeon(props: FallbackDungeonProps) {
   const callbacksRef = useRef(props);
   callbacksRef.current = props;
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const lastInputAtRef = useRef(0);
   const safeDungeon = useMemo(() => buildSafeDungeon(960, 576), []);
   const stageWidth = safeDungeon.metrics.widthTiles * TILE_SIZE;
   const stageHeight = safeDungeon.metrics.heightTiles * TILE_SIZE;
@@ -130,6 +186,7 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
         initialEnemies.map((enemy) => [enemy.id, enemy.kind === "wisp" ? "south" : "west"]),
       ),
   );
+  const [animationTick, setAnimationTick] = useState(0);
 
   useEffect(() => {
     setPlayerTile({
@@ -146,11 +203,25 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
         initialEnemies.map((enemy) => [enemy.id, enemy.kind === "wisp" ? "south" : "west"]),
       ),
     );
-    callbacksRef.current.onHealthChange(props.stats.health);
-    callbacksRef.current.onLog(
-      createLog("Fallback dungeon engaged. Move with WASD and strike with Space.", "neutral"),
-    );
+    scheduleUiUpdate(() => {
+      callbacksRef.current.onHealthChange(props.stats.health);
+      callbacksRef.current.onLog(
+        createLog("Fallback vault path engaged. Move with WASD and strike with Space.", "neutral"),
+      );
+    });
   }, [initialEnemies, props.runId, props.stats.health, safeDungeon]);
+
+  useEffect(() => {
+    if (!props.active) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setAnimationTick((current) => current + 1);
+    }, 180);
+
+    return () => window.clearInterval(intervalId);
+  }, [props.active]);
 
   useEffect(() => {
     const element = viewportRef.current;
@@ -223,12 +294,14 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
           { defense: callbacksRef.current.stats.defense },
         );
         nextHealth = Math.max(0, nextHealth - hit.damage);
-        callbacksRef.current.onLog(
-          createLog(
-            `${ENEMY_THEME[enemy.kind].name} hits you for ${hit.damage}${hit.crit ? " crit" : ""}.`,
-            "bad",
-          ),
-        );
+        scheduleUiUpdate(() => {
+          callbacksRef.current.onLog(
+            createLog(
+              `${ENEMY_THEME[enemy.kind].name} hits you for ${hit.damage}${hit.crit ? " crit" : ""}.`,
+              "bad",
+            ),
+          );
+        });
         nextDirections[enemy.id] = getDirectionFromDelta(
           currentPlayer.x - enemy.tile.x,
           currentPlayer.y - enemy.tile.y,
@@ -250,18 +323,22 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
 
     if (nextHealth !== health) {
       setHealth(nextHealth);
-      callbacksRef.current.onHealthChange(nextHealth);
+      scheduleUiUpdate(() => {
+        callbacksRef.current.onHealthChange(nextHealth);
+      });
       if (nextHealth <= 0 && !resolved) {
         setResolved(true);
-        callbacksRef.current.onRunComplete({
-          id: callbacksRef.current.runId,
-          roomName: DUNGEON_NAME,
-          enemiesDefeated: moved.filter((enemy) => !enemy.alive).length,
-          lootCollected: loot.length,
-          outcome: "defeat",
-          startedAt,
-          endedAt: new Date().toISOString(),
-          notes: "The fallback dungeon still got you. Try the scene again.",
+        scheduleUiUpdate(() => {
+          callbacksRef.current.onRunComplete({
+            id: callbacksRef.current.runId,
+            roomName: DUNGEON_NAME,
+            enemiesDefeated: moved.filter((enemy) => !enemy.alive).length,
+            lootCollected: loot.length,
+            outcome: "defeat",
+            startedAt,
+            endedAt: new Date().toISOString(),
+            notes: "The fallback route collapsed before extraction. Refit and re-enter the vault.",
+          });
         });
       }
     }
@@ -280,6 +357,12 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
       }
 
       const key = event.key.toLowerCase();
+      const now = Date.now();
+      if (now - lastInputAtRef.current < 90) {
+        return;
+      }
+
+      lastInputAtRef.current = now;
       let nextPlayer = playerTile;
       let acted = false;
 
@@ -297,22 +380,26 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
 
           const collected = loot.find((drop) => sameTile(drop.tile, nextPlayer));
           if (collected) {
-            callbacksRef.current.onLootCollected(collected.item);
-            callbacksRef.current.onLog(createLog(`Looted ${collected.item.name}.`, "loot"));
+            scheduleUiUpdate(() => {
+              callbacksRef.current.onLootCollected(collected.item);
+              callbacksRef.current.onLog(createLog(`Looted ${collected.item.name}.`, "loot"));
+            });
             setLoot((current) => current.filter((drop) => drop.id !== collected.id));
           }
 
           if (allEnemiesDown && sameTile(nextPlayer, portalTile)) {
             setResolved(true);
-            callbacksRef.current.onRunComplete({
-              id: callbacksRef.current.runId,
-              roomName: DUNGEON_NAME,
-              enemiesDefeated: enemies.filter((enemy) => !enemy.alive).length,
-              lootCollected: loot.length,
-              outcome: "victory",
-              startedAt,
-              endedAt: new Date().toISOString(),
-              notes: "Fallback dungeon cleared. The rescue route is open.",
+            scheduleUiUpdate(() => {
+              callbacksRef.current.onRunComplete({
+                id: callbacksRef.current.runId,
+                roomName: DUNGEON_NAME,
+                enemiesDefeated: enemies.filter((enemy) => !enemy.alive).length,
+                lootCollected: loot.length,
+                outcome: "victory",
+                startedAt,
+                endedAt: new Date().toISOString(),
+                notes: "Fallback vault path cleared. The extraction gate is open.",
+              });
             });
             return;
           }
@@ -328,7 +415,11 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
           .sort((left, right) => manhattan(left.tile, playerTile) - manhattan(right.tile, playerTile))[0];
 
         if (!target || manhattan(target.tile, playerTile) > 1) {
-          callbacksRef.current.onLog(createLog("Swing missed. Step closer to strike.", "neutral"));
+          scheduleUiUpdate(() => {
+            callbacksRef.current.onLog(
+              createLog("Swing missed. Step closer to strike.", "neutral"),
+            );
+          });
         } else {
           const hit = calculateDamage(
             {
@@ -357,19 +448,21 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
                 setLoot((drops) => [
                   ...drops,
                   {
-                    id: `${enemy.id}-loot`,
+                    id: createId(`${enemy.id}-loot`),
                     item: lootDrop,
                     tile: enemy.tile,
                   },
                 ]);
               }
 
-              callbacksRef.current.onLog(
-                createLog(
-                  `Defeated ${ENEMY_THEME[enemy.kind].name}${lootDrop ? ` and dropped ${lootDrop.name}` : ""}.`,
-                  "good",
-                ),
-              );
+              scheduleUiUpdate(() => {
+                callbacksRef.current.onLog(
+                  createLog(
+                    `Defeated ${ENEMY_THEME[enemy.kind].name}${lootDrop ? ` and dropped ${lootDrop.name}` : ""}.`,
+                    "good",
+                  ),
+                );
+              });
 
               return { ...enemy, health: 0, alive: false };
             });
@@ -377,12 +470,14 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
             return moveEnemies(next, playerTile);
           });
 
-          callbacksRef.current.onLog(
-            createLog(
-              `You hit ${ENEMY_THEME[target.kind].name} for ${hit.damage}${hit.crit ? " crit" : ""}.`,
-              hit.crit ? "good" : "neutral",
-            ),
-          );
+          scheduleUiUpdate(() => {
+            callbacksRef.current.onLog(
+              createLog(
+                `You hit ${ENEMY_THEME[target.kind].name} for ${hit.damage}${hit.crit ? " crit" : ""}.`,
+                hit.crit ? "good" : "neutral",
+              ),
+            );
+          });
           setEnemyDirections((current) => ({
             ...current,
             [target.id]: getDirectionFromDelta(
@@ -413,11 +508,13 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
     startedAt,
   ]);
 
+  const playerSheetRoot = PLAYER_SHEETS[props.archetype];
+
   return (
     <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#050816]/85 shadow-[0_0_90px_rgba(86,229,255,0.08)]">
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between px-4 py-3">
         <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-[11px] uppercase tracking-[0.28em] text-amber-100">
-          Dungeon Live
+          Safe Mode
         </span>
         <span className="rounded-full border border-lime-400/20 bg-lime-400/10 px-3 py-1 text-[11px] uppercase tracking-[0.28em] text-lime-200">
           WASD + Space
@@ -439,166 +536,194 @@ export function FallbackDungeon(props: FallbackDungeonProps) {
               transformOrigin: "center center",
             }}
           >
-          <img
-            src={SCENE_IMAGE}
-            alt="Dungeon backdrop"
-            className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-95"
-            draggable={false}
-          />
-          <img
-            src={SCENE_IMAGE_ALT}
-            alt=""
-            className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-24 mix-blend-screen"
-            draggable={false}
-          />
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(22,163,74,0.08),transparent_35%),linear-gradient(180deg,rgba(5,8,22,0.12),rgba(5,8,22,0.38))]" />
-
-          {safeDungeon.walkableGrid.map((row, y) =>
-            row.map((walkable, x) => (
-              <div
-                key={`${x}-${y}`}
-                className={`absolute ${
-                  walkable ? "bg-stone-200/12" : "bg-slate-950/0"
-                }`}
-                style={{
-                  left: x * TILE_SIZE,
-                  top: y * TILE_SIZE,
-                  width: TILE_SIZE,
-                  height: TILE_SIZE,
-                  boxShadow: walkable
-                    ? "inset 0 0 0 1px rgba(255,255,255,0.04), 0 0 18px rgba(240,210,170,0.05)"
-                    : "none",
-                  backdropFilter: walkable ? "blur(0.5px)" : undefined,
-                }}
-              />
-            )),
-          )}
-
-          {!allEnemiesDown ? null : (
-            <div
-              className="absolute flex items-center justify-center"
+            <img
+              src={SCENE_TILE_SHEET}
+              alt=""
+              className="pointer-events-none absolute left-1/2 top-1/2 max-w-none -translate-x-1/2 -translate-y-1/2 opacity-18 mix-blend-screen"
               style={{
-                left: portalTile.x * TILE_SIZE - 8,
-                top: portalTile.y * TILE_SIZE - 14,
-                width: TILE_SIZE + 16,
-                height: TILE_SIZE + 16,
+                width: stageWidth * 1.35,
+                height: stageHeight * 1.35,
+                imageRendering: "pixelated",
               }}
-            >
-              <div className="absolute inset-0 rounded-full border border-amber-300/55 bg-amber-300/15 shadow-[0_0_40px_rgba(245,158,11,0.35)]" />
-              <div className="absolute inset-[10px] rounded-full border border-white/30" />
-              <span className="relative z-10 text-[10px] font-semibold uppercase tracking-[0.26em] text-amber-100">
-                Exit
-              </span>
-            </div>
-          )}
-
-          {loot.map((drop) => (
-            <div
-              key={drop.id}
-              className="absolute flex items-center justify-center"
+              draggable={false}
+            />
+            <img
+              src={SCENE_OBJECT_SHEET}
+              alt=""
+              className="pointer-events-none absolute left-1/2 top-1/2 max-w-none -translate-x-1/2 -translate-y-1/2 opacity-14 mix-blend-screen"
               style={{
-                left: drop.tile.x * TILE_SIZE - 6,
-                top: drop.tile.y * TILE_SIZE - 10,
-                width: TILE_SIZE + 12,
-                height: TILE_SIZE + 12,
+                width: stageWidth * 1.05,
+                height: stageHeight * 1.05,
+                imageRendering: "pixelated",
               }}
-            >
-              <div className="absolute inset-0 rounded-full bg-amber-300/18 blur-sm" />
-              <img
-                src={resolveItemIcon(drop.item)}
-                alt={drop.item.name}
-                className="relative z-10 h-8 w-8 object-contain drop-shadow-[0_0_14px_rgba(250,204,21,0.4)]"
-                draggable={false}
-              />
-            </div>
-          ))}
+              draggable={false}
+            />
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(34,197,94,0.12),transparent_36%),radial-gradient(circle_at_bottom_right,rgba(96,165,250,0.16),transparent_28%),linear-gradient(180deg,rgba(5,8,22,0.18),rgba(5,8,22,0.46))]" />
 
-          {enemies
-            .filter((enemy) => enemy.alive)
-            .map((enemy) => (
+            {safeDungeon.walkableGrid.map((row, y) =>
+              row.map((walkable, x) => (
+                <div
+                  key={`${x}-${y}`}
+                  className="absolute"
+                  style={{
+                    left: x * TILE_SIZE,
+                    top: y * TILE_SIZE,
+                    width: TILE_SIZE,
+                    height: TILE_SIZE,
+                    background: walkable
+                      ? "linear-gradient(180deg, rgba(145,156,132,0.26), rgba(79,93,72,0.18))"
+                      : "linear-gradient(180deg, rgba(8,15,28,0.92), rgba(6,10,18,0.92))",
+                    boxShadow: walkable
+                      ? "inset 0 0 0 1px rgba(255,255,255,0.05), 0 0 18px rgba(163,230,53,0.05)"
+                      : "inset 0 0 0 1px rgba(59,130,246,0.03)",
+                  }}
+                />
+              )),
+            )}
+
+            {!allEnemiesDown ? null : (
               <div
-                key={enemy.id}
-                className="absolute flex flex-col items-center justify-center"
+                className="absolute flex items-center justify-center"
                 style={{
-                  left: enemy.tile.x * TILE_SIZE - 10,
-                  top: enemy.tile.y * TILE_SIZE - 26,
+                  left: portalTile.x * TILE_SIZE - 10,
+                  top: portalTile.y * TILE_SIZE - 18,
                   width: TILE_SIZE + 20,
-                  height: TILE_SIZE + 34,
+                  height: TILE_SIZE + 22,
                 }}
               >
-                <div className="mb-1 h-1.5 w-10 overflow-hidden rounded-full bg-slate-900">
-                  <div
-                    className="h-full rounded-full bg-lime-400"
-                    style={{
-                      width: `${Math.max(0, Math.round((enemy.health / ENEMY_THEME[enemy.kind].health) * 100))}%`,
-                    }}
-                  />
-                </div>
-                <div className="relative flex h-14 w-14 items-end justify-center">
-                  <div className="absolute bottom-1 h-3 w-8 rounded-full bg-black/40 blur-sm" />
+                <div className="absolute inset-0 rounded-full border border-amber-300/55 bg-amber-300/15 shadow-[0_0_40px_rgba(245,158,11,0.35)]" />
+                <img
+                  src={PORTAL_ICON}
+                  alt="Extraction gate"
+                  className="relative z-10 h-8 w-8 object-contain drop-shadow-[0_0_18px_rgba(250,204,21,0.4)]"
+                  style={{ imageRendering: "pixelated" }}
+                  draggable={false}
+                />
+              </div>
+            )}
+
+            {loot.map((drop) => (
+              <div
+                key={drop.id}
+                className="absolute flex items-center justify-center"
+                style={{
+                  left: drop.tile.x * TILE_SIZE - 6,
+                  top: drop.tile.y * TILE_SIZE - 10,
+                  width: TILE_SIZE + 12,
+                  height: TILE_SIZE + 12,
+                }}
+              >
+                <div className="absolute inset-0 rounded-full bg-amber-300/18 blur-sm" />
+                {isAssetIcon(resolveItemIcon(drop.item)) ? (
                   <img
-                    src={getAssetForDirection(
-                      enemy.kind === "wisp" ? SALMAN_ASSET_ROOT : CHOTA_PANDIT_ASSET_ROOT,
-                      enemyDirections[enemy.id] ?? "south",
-                    )}
-                    alt={ENEMY_THEME[enemy.kind].name}
-                    className="relative z-10 h-12 w-12 object-contain"
-                    style={{ imageRendering: "pixelated" }}
+                    src={resolveItemIcon(drop.item)}
+                    alt={drop.item.name}
+                    className="relative z-10 h-8 w-8 object-contain drop-shadow-[0_0_14px_rgba(250,204,21,0.4)]"
                     draggable={false}
                   />
-                </div>
-                <div className="mt-1 rounded-full border border-rose-400/20 bg-black/35 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-rose-100">
-                  {ENEMY_THEME[enemy.kind].name}
-                </div>
+                ) : (
+                  <span className="relative z-10 text-2xl drop-shadow-[0_0_14px_rgba(250,204,21,0.4)]">
+                    {resolveItemIcon(drop.item)}
+                  </span>
+                )}
               </div>
             ))}
 
-          {COMPANION_LAYOUT.map((companion) => (
+            {enemies
+              .filter((enemy) => enemy.alive)
+              .map((enemy) => (
+                <div
+                  key={enemy.id}
+                  className="absolute flex flex-col items-center justify-center"
+                  style={{
+                    left: enemy.tile.x * TILE_SIZE - 10,
+                    top: enemy.tile.y * TILE_SIZE - 26,
+                    width: TILE_SIZE + 20,
+                    height: TILE_SIZE + 34,
+                  }}
+                >
+                  <div className="mb-1 h-1.5 w-10 overflow-hidden rounded-full bg-slate-900">
+                    <div
+                      className="h-full rounded-full bg-lime-400"
+                      style={{
+                        width: `${Math.max(0, Math.round((enemy.health / ENEMY_THEME[enemy.kind].health) * 100))}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="relative flex h-14 w-14 items-end justify-center">
+                    <div className="absolute bottom-1 h-3 w-8 rounded-full bg-black/40 blur-sm" />
+                    <SpriteStrip
+                      src={`${ENEMY_SHEETS[enemy.kind]}/Run.png`}
+                      frameWidth={ENEMY_FRAME.width}
+                      frameHeight={ENEMY_FRAME.height}
+                      frameCount={7}
+                      frameIndex={animationTick + enemy.tile.x + enemy.tile.y}
+                      width={52}
+                      height={52}
+                      flipX={isFacingLeft(enemyDirections[enemy.id] ?? "south")}
+                      className="relative z-10"
+                    />
+                  </div>
+                  <div className="mt-1 rounded-full border border-rose-400/20 bg-black/35 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-rose-100">
+                    {ENEMY_THEME[enemy.kind].name}
+                  </div>
+                </div>
+              ))}
+
+            {COMPANION_LAYOUT.map((companion, index) => (
+              <div
+                key={companion.name}
+                className="absolute flex items-end justify-center"
+                style={{
+                  left: playerTile.x * TILE_SIZE + companion.dx * TILE_SIZE - 14,
+                  top: playerTile.y * TILE_SIZE + companion.dy * TILE_SIZE - 24,
+                  width: TILE_SIZE + 18,
+                  height: TILE_SIZE + 26,
+                }}
+              >
+                <div className="absolute bottom-1 h-3 w-8 rounded-full bg-black/30 blur-sm" />
+                <SpriteStrip
+                  src={`${companion.sheetRoot}/Idle.png`}
+                  frameWidth={PLAYER_FRAME.width}
+                  frameHeight={PLAYER_FRAME.height}
+                  frameCount={6}
+                  frameIndex={animationTick + index * 2}
+                  width={48}
+                  height={48}
+                  flipX={isFacingLeft(playerDirection)}
+                  className="relative z-10 opacity-90"
+                />
+              </div>
+            ))}
+
             <div
-              key={companion.name}
               className="absolute flex items-end justify-center"
               style={{
-                left: playerTile.x * TILE_SIZE + companion.dx * TILE_SIZE - 14,
-                top: playerTile.y * TILE_SIZE + companion.dy * TILE_SIZE - 24,
-                width: TILE_SIZE + 18,
-                height: TILE_SIZE + 26,
+                left: playerTile.x * TILE_SIZE - 12,
+                top: playerTile.y * TILE_SIZE - 28,
+                width: TILE_SIZE + 24,
+                height: TILE_SIZE + 34,
               }}
             >
-              <div className="absolute bottom-1 h-3 w-8 rounded-full bg-black/30 blur-sm" />
-              <img
-                src={getAssetForDirection(companion.assetRoot, playerDirection)}
-                alt={companion.name}
-                className="relative z-10 h-12 w-12 object-contain opacity-90"
-                style={{ imageRendering: "pixelated" }}
-                draggable={false}
+              <div className="absolute bottom-1 h-3 w-9 rounded-full bg-black/35 blur-sm" />
+              <SpriteStrip
+                src={`${playerSheetRoot}/Walk.png`}
+                frameWidth={PLAYER_FRAME.width}
+                frameHeight={PLAYER_FRAME.height}
+                frameCount={8}
+                frameIndex={animationTick}
+                width={56}
+                height={56}
+                flipX={isFacingLeft(playerDirection)}
+                className="relative z-10"
               />
             </div>
-          ))}
-
-          <div
-            className="absolute flex items-end justify-center"
-            style={{
-              left: playerTile.x * TILE_SIZE - 12,
-              top: playerTile.y * TILE_SIZE - 28,
-              width: TILE_SIZE + 24,
-              height: TILE_SIZE + 34,
-            }}
-          >
-            <div className="absolute bottom-1 h-3 w-9 rounded-full bg-black/35 blur-sm" />
-            <img
-              src={getAssetForDirection(PLAYER_ASSET_ROOT, playerDirection)}
-              alt={PLAYER_HERO_NAME}
-              className="relative z-10 h-14 w-14 object-contain"
-              style={{ imageRendering: "pixelated" }}
-              draggable={false}
-            />
-          </div>
           </div>
         </div>
       </div>
 
       <div className="border-t border-white/10 bg-black/25 px-4 py-3 text-xs text-slate-300">
-        {PLAYER_HERO_NAME} is live with Abhishek and Amitabh on the floor. Clear the enemies, grab the drops, then step onto the exit ring.
+        {PLAYER_HERO_NAME} is live with the Shade Runner and Ember Scholar. Clear the room, grab the drops, and step through the extraction gate.
       </div>
     </div>
   );
