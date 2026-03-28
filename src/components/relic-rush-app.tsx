@@ -83,7 +83,6 @@ import {
   expectedChainId,
   expectedChainName,
   getInjectedBrowserProvider,
-  getMonadExplorerTxUrl,
   hasInjectedWallet,
   readWalletState,
   shortenAddress,
@@ -91,7 +90,7 @@ import {
   switchToExpectedChain,
   type WalletState,
 } from "@/src/lib/wallet";
-import { shortenTxHash } from "@/src/lib/monad-explorer";
+import { getMonadExplorerTxUrl, shortenTxHash } from "@/src/lib/monad-explorer";
 import { 
   useMonadActivity, 
   pushChainAction, 
@@ -264,6 +263,15 @@ export function RelicRushApp() {
     setTimeout(() => {
       setToasts((current) => current.filter((t) => t.id !== id));
     }, 5500);
+  }
+
+  async function handleCopyTxHash(txHash: string) {
+    try {
+      await navigator.clipboard.writeText(txHash);
+      addToast("Transaction hash copied.", "success", txHash);
+    } catch {
+      addToast("Could not copy the transaction hash from this browser.", "error", txHash);
+    }
   }
 
   function resetRunUi(nextStatus?: string) {
@@ -1633,16 +1641,28 @@ export function RelicRushApp() {
                               <p className="mt-2 font-mono text-[11px] tracking-wide text-slate-300">
                                 {shortenTxHash(action.txHash)}
                               </p>
-                              {txUrl ? (
-                                <a
-                                  href={txUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="mt-2 inline-flex text-xs text-cyan-300 underline underline-offset-4"
+                              <p className="mt-2 break-all font-mono text-[11px] text-slate-500">
+                                {action.txHash}
+                              </p>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleCopyTxHash(action.txHash)}
+                                  className="rounded-full border border-white/10 bg-white/8 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/14"
                                 >
-                                  View transaction
-                                </a>
-                              ) : null}
+                                  Copy Hash
+                                </button>
+                                {txUrl ? (
+                                  <a
+                                    href={txUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex rounded-full border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-cyan-200 transition hover:bg-cyan-400/20"
+                                  >
+                                    View Tx
+                                  </a>
+                                ) : null}
+                              </div>
                             </div>
                           );
                         })()
@@ -1749,20 +1769,34 @@ export function RelicRushApp() {
               {toast.type === "error" && "❌ "}
               <div>{toast.message}</div>
               {toast.txHash ? (
-                <div className="mt-2 font-mono text-[11px] tracking-wide text-white/70">
-                  {shortenTxHash(toast.txHash)}
-                </div>
+                <>
+                  <div className="mt-2 font-mono text-[11px] tracking-wide text-white/70">
+                    {shortenTxHash(toast.txHash)}
+                  </div>
+                  <div className="mt-1 max-w-[22rem] break-all font-mono text-[10px] text-white/55">
+                    {toast.txHash}
+                  </div>
+                </>
               ) : null}
             </div>
             {toast.txHash ? (
-              <a
-                href={getMonadExplorerTxUrl(toast.txHash)}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-lg bg-white/10 px-2 py-1 text-[10px] uppercase tracking-wider text-white transition hover:bg-white/20"
-              >
-                View Tx
-              </a>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleCopyTxHash(toast.txHash!)}
+                  className="rounded-lg bg-white/10 px-2 py-1 text-[10px] uppercase tracking-wider text-white transition hover:bg-white/20"
+                >
+                  Copy Hash
+                </button>
+                <a
+                  href={getMonadExplorerTxUrl(toast.txHash)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-lg bg-white/10 px-2 py-1 text-center text-[10px] uppercase tracking-wider text-white transition hover:bg-white/20"
+                >
+                  View Tx
+                </a>
+              </div>
             ) : null}
             <button
               onClick={() => setToasts((current) => current.filter((t) => t.id !== toast.id))}
