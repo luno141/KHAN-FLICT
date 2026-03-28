@@ -2,7 +2,7 @@ export type Archetype = "Warrior" | "Rogue" | "Mage";
 
 export type EnemyType = "slime" | "skeleton" | "wisp";
 
-export type Rarity = "common" | "rare" | "epic";
+export type Rarity = "common" | "uncommon" | "rare" | "epic" | "mythical";
 
 export type ItemType = "weapon" | "armor" | "artifact" | "charm" | "consumable";
 

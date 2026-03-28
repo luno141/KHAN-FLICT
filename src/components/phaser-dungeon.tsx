@@ -120,6 +120,9 @@ const ENEMY_PACK: Record<EnemyType, string> = {
 const COLLISION_LAYERS = new Set([
   "elevated_space",
   "elevated_space2",
+  "water",
+  "water_detailization",
+  "water_coasts",
 ]);
 
 const WALKABLE_LAYERS = new Set([
@@ -133,9 +136,26 @@ const WALKABLE_LAYERS = new Set([
   "stairs",
 ]);
 
+/**
+ * Layers rendered ABOVE the player sprite (depth 25) for pseudo-3D depth.
+ * The character walks "behind" these objects.
+ */
+const OVERLAY_LAYERS = new Set([
+  "Objects",
+  "Objects2",
+  "Objects3",
+  "Objects4",
+  "Objects5",
+  "Objects_under_elevated_space",
+  "elevated_space",
+  "elevated_space2",
+]);
+
+/** All layers considered for map bounding-box calculation. */
 const MAP_BOUND_LAYERS = new Set([
   "water",
   "water_detailization",
+  "water_coasts",
   "ground",
   "darker_surface1",
   "darker_surface2",
@@ -387,15 +407,31 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
           this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
           this.cameras.main.setZoom(1.02);
 
+          // Locked gate frame — visible from the start but dimmed
           this.portal = this.physics.add.sprite(
             encounterLayout.portal.x,
             encounterLayout.portal.y,
-            "relic-portal",
+            "relic-portal-locked",
           );
-          this.portal.setVisible(false).setDepth(15);
+          this.portal.setDepth(15).setAlpha(0.7);
           if (this.getDynamicBody(this.portal)) {
             this.getDynamicBody(this.portal)!.enable = false;
           }
+
+          // "EXIT" label above the portal
+          const portalLabel = this.add.text(
+            encounterLayout.portal.x,
+            encounterLayout.portal.y - 40,
+            "🔒 EXIT",
+            {
+              color: "#94a3b8",
+              fontFamily: "var(--font-mono)",
+              fontSize: "10px",
+            },
+          );
+          portalLabel.setOrigin(0.5).setDepth(22);
+          // Store the label so we can update it when unlocked
+          this.portal.setData("label", portalLabel);
 
           this.enemyBodies = this.spawnEnemies(encounterLayout.enemies);
           this.enemyBodies.forEach((enemy) => {
@@ -613,11 +649,30 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
           if (!this.textures.exists("relic-portal")) {
             const painter = this.add.graphics();
 
-            painter.fillStyle(paletteValues.portal, 1);
-            painter.fillCircle(22, 22, 18);
-            painter.lineStyle(3, paletteValues.portalGlow, 0.82);
-            painter.strokeCircle(22, 22, 18);
-            painter.generateTexture("relic-portal", 44, 44);
+            // Exit portal — glowing archway gate
+            const portalW = 52;
+            const portalH = 60;
+            // Outer glow ring
+            painter.fillStyle(paletteValues.portalGlow, 0.18);
+            painter.fillEllipse(portalW / 2, portalH / 2, portalW + 8, portalH + 8);
+            // Inner ellipse
+            painter.fillStyle(paletteValues.portal, 0.85);
+            painter.fillEllipse(portalW / 2, portalH / 2, portalW - 8, portalH - 8);
+            // Centre bright core
+            painter.fillStyle(0xfefce8, 0.7);
+            painter.fillEllipse(portalW / 2, portalH / 2, 18, 22);
+            // Gate frame
+            painter.lineStyle(3, paletteValues.portalGlow, 0.92);
+            painter.strokeEllipse(portalW / 2, portalH / 2, portalW - 4, portalH - 4);
+            painter.generateTexture("relic-portal", portalW, portalH);
+            painter.clear();
+
+            // Locked gate placeholder (dimmed)
+            painter.fillStyle(0x334155, 0.5);
+            painter.fillEllipse(portalW / 2, portalH / 2, portalW - 8, portalH - 8);
+            painter.lineStyle(2, 0x475569, 0.6);
+            painter.strokeEllipse(portalW / 2, portalH / 2, portalW - 4, portalH - 4);
+            painter.generateTexture("relic-portal-locked", portalW, portalH);
             painter.clear();
 
             painter.fillStyle(paletteValues.drop, 1);
@@ -738,15 +793,17 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
             Array.from({ length: metrics.widthTiles }, () => false),
           );
 
-          layers.forEach((layer) => {
-            const isWalkableLayer = WALKABLE_LAYERS.has(layer.name);
-            const isBlockedLayer = COLLISION_LAYERS.has(layer.name);
+          // Pass 1: mark walkable floors
+          // Pass 2: mark collision layers as impassable (overrides walkable)
+          for (const layer of layers) {
+            const isWalkable = WALKABLE_LAYERS.has(layer.name);
+            const isBlocked = COLLISION_LAYERS.has(layer.name);
 
-            if (!isWalkableLayer && !isBlockedLayer) {
-              return;
+            if (!isWalkable && !isBlocked) {
+              continue;
             }
 
-            layer.chunks.forEach((chunk) => {
+            for (const chunk of layer.chunks) {
               chunk.gids.forEach((gid, index) => {
                 if (!gid) {
                   return;
@@ -766,15 +823,15 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
                   return;
                 }
 
-                if (isWalkableLayer) {
+                if (isWalkable) {
                   grid[localY][localX] = true;
                 }
-                if (isBlockedLayer) {
+                if (isBlocked) {
                   grid[localY][localX] = false;
                 }
               });
-            });
-          });
+            }
+          }
 
           return grid;
         }
@@ -834,13 +891,23 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
         }
 
         private renderDungeonMap(layers: TileLayer[], metrics: MapMetrics) {
-          const renderTexture = this.add
+          // Base layer (depth 3) — floor, water, bricks, details — BELOW the player
+          const baseTex = this.add
             .renderTexture(metrics.originX, metrics.originY, metrics.widthPx, metrics.heightPx)
             .setOrigin(0)
             .setDepth(3);
-          renderTexture.fill(0x0a1322, 1);
+          baseTex.fill(0x0a1322, 1);
+
+          // Object overlay (depth 25) — temples, trees, walls — ABOVE the player
+          const overlayTex = this.add
+            .renderTexture(metrics.originX, metrics.originY, metrics.widthPx, metrics.heightPx)
+            .setOrigin(0)
+            .setDepth(25);
 
           for (const layer of layers) {
+            const isOverlay = OVERLAY_LAYERS.has(layer.name);
+            const target = isOverlay ? overlayTex : baseTex;
+
             for (const chunk of layer.chunks) {
               chunk.gids.forEach((gid, index) => {
                 if (!gid) {
@@ -869,7 +936,7 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
                   return;
                 }
 
-                renderTexture.drawFrame(
+                target.drawFrame(
                   tileset.textureKey,
                   frame,
                   localX * MAP_TILE_SIZE,
@@ -1440,19 +1507,33 @@ export function PhaserDungeon(props: PhaserDungeonProps) {
           });
 
           if (this.enemyBodies.every((entry) => !entry.alive)) {
-            this.portal.setVisible(true);
+            // Swap locked texture for the glowing portal
+            this.portal.setTexture("relic-portal");
+            this.portal.setAlpha(1);
             if (this.getDynamicBody(this.portal)) {
               this.getDynamicBody(this.portal)!.enable = true;
             }
+
+            // Update the label
+            const portalLabel = this.portal.getData("label") as Phaser.GameObjects.Text | null;
+            if (portalLabel) {
+              portalLabel.setText("✦ EXIT");
+              portalLabel.setColor("#fde68a");
+            }
+
             callbacksRef.current.onLog(
-              createLog("The vault gate opens. Step into the golden sigil.", "good"),
+              createLog("The vault gate opens! Step into the portal to escape.", "good"),
             );
+
+            // Pulsing glow animation
             this.tweens.add({
               targets: this.portal,
-              scale: { from: 1, to: 1.18 },
-              duration: 700,
+              scale: { from: 1, to: 1.22 },
+              alpha: { from: 1, to: 0.82 },
+              duration: 800,
               yoyo: true,
               repeat: -1,
+              ease: "Sine.easeInOut",
             });
           }
         }

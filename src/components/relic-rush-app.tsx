@@ -184,22 +184,46 @@ export function RelicRushApp() {
     : 0;
 
   useEffect(() => {
-    const storedId = window.localStorage.getItem(STORAGE_KEY);
-    const cachedSnapshot = readCachedSnapshot();
-
-    if (storedId) {
-      setPlayerId(storedId);
-      if (cachedSnapshot?.profile.playerId === storedId) {
-        applySnapshot(cachedSnapshot, `Welcome back, ${cachedSnapshot.profile.displayName}.`);
-        void restoreProfileFromCache(cachedSnapshot);
-      } else {
-        void hydrateProfile(storedId);
-      }
-    }
-
-    void refreshWallet();
-    void loadListings();
+    void initFromWallet();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function initFromWallet() {
+    try {
+      const currentWallet = hasInjectedWallet() ? await readWalletState() : DEFAULT_WALLET;
+      setWallet(currentWallet);
+
+      if (currentWallet.address) {
+        const walletPlayerId = currentWallet.address.toLowerCase();
+        setPlayerId(walletPlayerId);
+        window.localStorage.setItem(STORAGE_KEY, walletPlayerId);
+
+        // Try to reload existing profile for this wallet
+        try {
+          setApiBusy(true);
+          const snapshot = await fetchProfile(walletPlayerId);
+          applySnapshot(snapshot, `Welcome back, ${snapshot.profile.displayName}.`);
+        } catch {
+          // No profile yet — user will pick an archetype
+          setStatus("Wallet connected. Choose a class to begin.");
+        } finally {
+          setApiBusy(false);
+        }
+      } else {
+        // No wallet — fall back to cached session if available
+        const storedId = window.localStorage.getItem(STORAGE_KEY);
+        const cachedSnapshot = readCachedSnapshot();
+        if (storedId && cachedSnapshot?.profile.playerId === storedId) {
+          setPlayerId(storedId);
+          applySnapshot(cachedSnapshot, `Welcome back, ${cachedSnapshot.profile.displayName}.`);
+        }
+      }
+
+      void loadListings();
+    } catch {
+      setWallet(DEFAULT_WALLET);
+    }
+  }
 
   useEffect(() => {
     if (wallet.address && hasRelicRushLedgerAddress()) {
@@ -214,8 +238,9 @@ export function RelicRushApp() {
       const ledger = createRelicRushRunLedger(provider);
       const score = await ledger.bestScore(wallet.address);
       setOnChainBestScore(Number(score));
-    } catch (err) {
-      console.error("Failed to fetch on-chain score:", err);
+    } catch {
+      // No score recorded yet (fresh contract returns BAD_DATA) — default to 0
+      setOnChainBestScore(0);
     }
   }
 
@@ -365,19 +390,24 @@ export function RelicRushApp() {
   }
 
   async function handleCreateProfile() {
+    if (!wallet.address) {
+      setStatus("Connect your wallet first.");
+      return;
+    }
+
     try {
       setApiBusy(true);
-      const nextPlayerId = playerId ?? createId("player");
+      const walletPlayerId = wallet.address.toLowerCase();
       const displayName = draftName.trim() || getDisplayName(selectedArchetype);
       const snapshot = await bootstrapProfile({
-        playerId: nextPlayerId,
+        playerId: walletPlayerId,
         archetype: selectedArchetype,
         displayName,
         walletAddress: wallet.address,
       });
 
-      window.localStorage.setItem(STORAGE_KEY, nextPlayerId);
-      setPlayerId(nextPlayerId);
+      window.localStorage.setItem(STORAGE_KEY, walletPlayerId);
+      setPlayerId(walletPlayerId);
       setProfile(snapshot.profile);
       setListings(snapshot.listings);
       setPurchaseHistory(snapshot.purchaseHistory);
@@ -417,8 +447,28 @@ export function RelicRushApp() {
 
   async function handleConnectWallet() {
     try {
-      setWallet(await connectWallet());
-      setStatus("Wallet connected. Premium artifact settlement can now use browser signing.");
+      const connected = await connectWallet();
+      setWallet(connected);
+
+      if (connected.address) {
+        const walletPlayerId = connected.address.toLowerCase();
+        setPlayerId(walletPlayerId);
+        window.localStorage.setItem(STORAGE_KEY, walletPlayerId);
+        setStatus("Wallet connected. Loading profile…");
+
+        // Try to load existing profile for this wallet
+        try {
+          setApiBusy(true);
+          const snapshot = await fetchProfile(walletPlayerId);
+          applySnapshot(snapshot, `Welcome back, ${snapshot.profile.displayName}.`);
+        } catch {
+          // No profile yet — user will create one
+          setProfile(null);
+          setStatus("Wallet connected. Choose a class to begin.");
+        } finally {
+          setApiBusy(false);
+        }
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Wallet connection failed.");
     }
@@ -973,7 +1023,32 @@ export function RelicRushApp() {
           </div>
         </section>
 
-        {!profile ? (
+        {!wallet.address ? (
+          /* ── Wallet Gate ── */
+          <section className="mt-4">
+            <Section eyebrow="Connect" title="Link your wallet to play">
+              <div className="space-y-4 text-center">
+                <div className="rounded-3xl border border-amber-400/20 bg-amber-400/5 p-6">
+                  <p className="text-4xl">🔗</p>
+                  <h3 className="mt-4 text-xl font-semibold text-white">
+                    MetaMask Required
+                  </h3>
+                  <p className="mt-2 text-sm text-slate-400">
+                    Your wallet address is your identity. Connect to play, collect NFT relics,
+                    and trade on the marketplace using MON tokens.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void handleConnectWallet()}
+                    className="mt-5 rounded-full border border-amber-400/40 bg-amber-400/15 px-6 py-3 text-sm font-medium text-amber-100 transition hover:bg-amber-400/25"
+                  >
+                    Connect Wallet
+                  </button>
+                </div>
+              </div>
+            </Section>
+          </section>
+        ) : !profile ? (
           <section className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
             <Section eyebrow="Start Here" title="Choose your delver">
               <div className="grid gap-4 lg:grid-cols-3">
@@ -1011,7 +1086,7 @@ export function RelicRushApp() {
 
             <Section
               eyebrow="Forge Profile"
-              title="Bootstrap the MVP run"
+              title="Bootstrap with your wallet"
               actions={
                 <button
                   type="button"
@@ -1038,19 +1113,18 @@ export function RelicRushApp() {
 
                 <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
                   <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
-                    Selected Archetype
+                    Wallet Identity
                   </p>
-                  <p className="mt-3 text-2xl font-semibold text-white">
-                    {selectedArchetype}
+                  <p className="mt-3 font-mono text-sm text-lime-200">
+                    {wallet.address?.slice(0, 6)}…{wallet.address?.slice(-4)}
                   </p>
-                  <p className="mt-2 text-sm text-slate-300">
-                    Starter kit, profile, and persistence scaffold will initialize from this class.
+                  <p className="mt-2 text-xs text-slate-400">
+                    Your wallet address is your player ID. Items and MON transactions are tied to this address.
                   </p>
                 </div>
 
                 <div className="rounded-3xl border border-cyan-400/15 bg-cyan-400/10 p-4 text-sm text-cyan-100">
-                  Core loop in this MVP is off-chain. Premium artifact ownership and settlement
-                  are wired separately so gameplay stays fast.
+                  Items are treated as NFTs. Buy, sell, and trade using MON on the Monad network.
                 </div>
               </div>
             </Section>

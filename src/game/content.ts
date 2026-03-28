@@ -54,6 +54,30 @@ export const ARCHETYPES: Record<Archetype, CharacterBlueprint> = {
 };
 
 export const ITEM_TEMPLATES: Record<string, ItemTemplate> = {
+  "rock": {
+    templateId: "rock",
+    name: "Heavy Rock",
+    type: "charm",
+    slot: "charm",
+    description: "It's literally just a rock. But it's heavy.",
+    icon: "🪨",
+    baseValue: 1,
+    premium: false,
+    baseBonuses: { defense: 1, speed: -1, luck: -1 },
+    color: "#9ca3af",
+  },
+  "wooden-sword": {
+    templateId: "wooden-sword",
+    name: "Wooden Sword",
+    type: "weapon",
+    slot: "weapon",
+    description: "A splintering training sword that barely hurts.",
+    icon: "🗡️",
+    baseValue: 3,
+    premium: false,
+    baseBonuses: { attack: 1 },
+    color: "#d6d3d1",
+  },
   "vanguard-blade": {
     templateId: "vanguard-blade",
     name: "Vanguard Blade",

@@ -22,14 +22,18 @@ import type {
 
 const RARITY_MULTIPLIERS: Record<Rarity, number> = {
   common: 1,
-  rare: 1.45,
-  epic: 2.1,
+  uncommon: 1.25,
+  rare: 1.55,
+  epic: 2.2,
+  mythical: 3.5,
 };
 
 const RARITY_COLORS: Record<Rarity, string> = {
   common: "#cbd5e1",
+  uncommon: "#4ade80",
   rare: "#60a5fa",
-  epic: "#f59e0b",
+  epic: "#c084fc",
+  mythical: "#f59e0b",
 };
 
 export function createId(prefix: string) {
@@ -186,6 +190,11 @@ export function rollLoot({ enemyType, luck }: LootRollContext): InventoryItem | 
     skeleton: 0.76,
     wisp: 1,
   };
+  const mythicalThresholdByEnemy: Record<EnemyType, number> = {
+    slime: 0.01,
+    skeleton: 0.03,
+    wisp: 0.08,
+  };
   const epicThresholdByEnemy: Record<EnemyType, number> = {
     slime: 0.07,
     skeleton: 0.12,
@@ -196,18 +205,27 @@ export function rollLoot({ enemyType, luck }: LootRollContext): InventoryItem | 
     skeleton: 0.42,
     wisp: 0.58,
   };
+  const uncommonThresholdByEnemy: Record<EnemyType, number> = {
+    slime: 0.55,
+    skeleton: 0.70,
+    wisp: 0.85,
+  };
 
   let rarity: Rarity = "common";
-  if (rarityRoll < epicThresholdByEnemy[enemyType] + luckBoost / 2) {
+  if (rarityRoll < mythicalThresholdByEnemy[enemyType] + luckBoost / 3) {
+    rarity = "mythical";
+  } else if (rarityRoll < epicThresholdByEnemy[enemyType] + luckBoost / 2) {
     rarity = "epic";
   } else if (rarityRoll < rareThresholdByEnemy[enemyType] + luckBoost) {
     rarity = "rare";
+  } else if (rarityRoll < uncommonThresholdByEnemy[enemyType] + luckBoost * 1.5) {
+    rarity = "uncommon";
   }
 
   const templatePools: Record<EnemyType, string[]> = {
-    slime: ["moonbrew", "duskmail", "ember-charm"],
-    skeleton: ["vanguard-blade", "whisper-daggers", "duskmail"],
-    wisp: ["ember-charm", "ember-staff", "starforged-idol", "starforged-idol"],
+    slime: ["rock", "wooden-sword", "moonbrew"],
+    skeleton: ["wooden-sword", "vanguard-blade", "whisper-daggers", "duskmail"],
+    wisp: ["ember-charm", "ember-staff", "starforged-idol"],
   };
 
   if (Math.random() > Math.min(1, dropChanceByEnemy[enemyType] + luckBoost)) {
