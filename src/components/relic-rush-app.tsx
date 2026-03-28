@@ -64,8 +64,23 @@ import {
   switchToExpectedChain,
   type WalletState,
 } from "@/src/lib/wallet";
+import { 
+  useMonadActivity, 
+  pushChainAction, 
+  explorerTxUrl,
+  type ChainAction 
+} from "@/src/lib/monad-activity";
 
 type TabId = "dungeon" | "inventory" | "marketplace" | "pvp" | "forge";
+
+type ToastType = "pending" | "success" | "error";
+type Toast = {
+  id: string;
+  message: string;
+  type: ToastType;
+  txHash?: string;
+  expiry: number;
+};
 
 const STORAGE_KEY = "relic-rush-player-id";
 const SNAPSHOT_STORAGE_KEY = "relic-rush-player-snapshot";
@@ -150,6 +165,9 @@ export function RelicRushApp() {
   const [purchaseHistory, setPurchaseHistory] = useState<PlayerSnapshot["purchaseHistory"]>([]);
   const [wallet, setWallet] = useState<WalletState>(DEFAULT_WALLET);
   const [status, setStatus] = useState("Forge a class and breach the catacomb.");
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [onChainBestScore, setOnChainBestScore] = useState<number | null>(null);
+  const txActions = useMonadActivity();
   const [apiBusy, setApiBusy] = useState(false);
   const [combatLog, setCombatLog] = useState<CombatLogEntry[]>([
     createLog("No dungeon run active.", "neutral"),
@@ -159,7 +177,6 @@ export function RelicRushApp() {
   const [runId, setRunId] = useState("");
   const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
   const [txPending, setTxPending] = useState(false);
-  const [txActions, setTxActions] = useState<TxAction[]>([]);
 
   const derivedStats = profile ? getDerivedStats(profile) : null;
   const healthPercent = derivedStats
@@ -183,6 +200,24 @@ export function RelicRushApp() {
     void refreshWallet();
     void loadListings();
   }, []);
+
+  useEffect(() => {
+    if (wallet.address && hasRelicRushLedgerAddress()) {
+      void fetchOnChainBestScore();
+    }
+  }, [wallet.address]);
+
+  async function fetchOnChainBestScore() {
+    if (!wallet.address || !window.ethereum) return;
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum as any);
+      const ledger = createRelicRushRunLedger(provider);
+      const score = await ledger.bestScore(wallet.address);
+      setOnChainBestScore(Number(score));
+    } catch (err) {
+      console.error("Failed to fetch on-chain score:", err);
+    }
+  }
 
   useEffect(() => {
     if (!profile) {
@@ -235,6 +270,15 @@ export function RelicRushApp() {
     if (nextStatus) {
       setStatus(nextStatus);
     }
+  }
+
+  function addToast(message: string, type: ToastType = "success", txHash?: string) {
+    const id = Math.random().toString(36).substring(2, 9);
+    const expiry = Date.now() + 5000;
+    setToasts((current) => [...current, { id, message, type, txHash, expiry }]);
+    setTimeout(() => {
+      setToasts((current) => current.filter((t) => t.id !== id));
+    }, 5500);
   }
 
   function readCachedSnapshot() {
@@ -396,26 +440,10 @@ export function RelicRushApp() {
     }
   }
 
-  function recordTxAction(label: string, txHash: string, confirmationMs: number) {
-    const action: TxAction = {
-      id: createId("tx"),
-      label,
-      txHash,
-      explorerUrl: getMonadExplorerTxUrl(txHash),
-      confirmationMs,
-      timestamp: new Date().toISOString(),
-    };
-    setTxActions((current) => [action, ...current].slice(0, 5));
-    return action;
-  }
-
-  function requireWalletReady(): boolean {
-    if (!wallet.address) {
-      setStatus("Connect a wallet first.");
-      return false;
-    }
-    if (!wallet.correctNetwork) {
-      setStatus(`Switch wallet to ${expectedChainName} first.`);
+  function requireWalletReady() {
+    if (!wallet.address || !wallet.correctNetwork) {
+      addToast("Connect your wallet to the correct network to continue.", "error");
+      void refreshWallet();
       return false;
     }
     return true;
@@ -623,44 +651,56 @@ export function RelicRushApp() {
   async function handleMintOnChain(item: InventoryItem) {
     if (!requireWalletReady() || !profile) return;
     if (!hasRelicRushMarketAddress()) {
-      setStatus("Set NEXT_PUBLIC_RELIC_RUSH_MARKET_ADDRESS to enable minting.");
+      addToast("Set NEXT_PUBLIC_RELIC_RUSH_MARKET_ADDRESS to enable minting.", "error");
       return;
     }
 
     try {
       setTxPending(true);
-      setStatus(`Minting ${item.name} on Monad…`);
-      const provider = new ethers.BrowserProvider(window.ethereum!);
+      const t0 = Date.now();
+      addToast(`Minting ${item.name} on Monad…`, "pending");
+
+      const provider = new ethers.BrowserProvider(window.ethereum as any);
       const signer = await provider.getSigner();
       const market = createRelicRushArtifactMarket(signer, relicRushMarketAddress);
 
       const artifactId = `artifact-${item.templateId}-${item.instanceId}`;
-      const tokenURI = `data:application/json,${encodeURIComponent(JSON.stringify({ name: item.name, description: item.description, icon: item.icon, rarity: item.rarity }))}`;
-
-      const startMs = performance.now();
-      const tx = await market.mintPremiumArtifact(wallet.address, artifactId, tokenURI);
-      const receipt = await tx.wait();
-      const confirmMs = Math.round(performance.now() - startMs);
-
-      const action = recordTxAction(`Mint ${item.name}`, receipt.hash, confirmMs);
-
-      setProfile((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          inventory: current.inventory.map((inv) =>
-            inv.instanceId === item.instanceId
-              ? { ...inv, chainTokenId: receipt.hash }
-              : inv,
-          ),
-        };
+      const tokenURI = JSON.stringify({
+        name: item.name,
+        description: item.description,
+        icon: item.icon,
+        rarity: item.rarity,
+        bonuses: item.bonuses
       });
 
-      const explorerLink = action.explorerUrl ? ` Explorer: ${action.explorerUrl}` : "";
-      setStatus(`${item.name} minted on Monad in ${confirmMs}ms. Tx: ${shortenAddress(receipt.hash)}.${explorerLink}`);
+      const tx = await market.mintPremiumArtifact(wallet.address, artifactId, tokenURI);
+      const receipt = await tx.wait();
+      const ms = Date.now() - t0;
+
+      if (receipt) {
+        addToast(`${item.name} minted successfully!`, "success", receipt.hash);
+        pushChainAction({
+          label: `Mint · ${item.name}`,
+          txHash: receipt.hash,
+          ms,
+          at: new Date()
+        });
+
+        setProfile((current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            inventory: current.inventory.map((inv) =>
+              inv.instanceId === item.instanceId
+                ? { ...inv, chainTokenId: receipt.hash }
+                : inv,
+            ),
+          };
+        });
+      }
     } catch (error: any) {
-      const reason = error?.reason || error?.message || "Mint failed.";
-      setStatus(`Mint failed: ${reason}`);
+      console.error("Mint failed:", error);
+      addToast(error.reason || error.message || "Minting failed. Check wallet.", "error");
     } finally {
       setTxPending(false);
     }
@@ -669,11 +709,11 @@ export function RelicRushApp() {
   async function handleListOnChain(item: InventoryItem) {
     if (!requireWalletReady() || !profile) return;
     if (!hasRelicRushMarketAddress()) {
-      setStatus("Set NEXT_PUBLIC_RELIC_RUSH_MARKET_ADDRESS to enable listing.");
+      addToast("Market address not configured.", "error");
       return;
     }
     if (!item.chainTokenId) {
-      setStatus("Mint this artifact on-chain first before listing.");
+      addToast("Mint this artifact on-chain first.", "error");
       return;
     }
 
@@ -681,30 +721,36 @@ export function RelicRushApp() {
       setTxPending(true);
       const monInput = priceInputs[item.instanceId] || "0.0025";
       const priceWei = ethers.parseEther(monInput);
-      setStatus(`Listing ${item.name} for ${monInput} MON on Monad…`);
+      const t0 = Date.now();
+      addToast(`Listing ${item.name} on Monad…`, "pending");
 
-      const provider = new ethers.BrowserProvider(window.ethereum!);
+      const provider = new ethers.BrowserProvider(window.ethereum as any);
       const signer = await provider.getSigner();
       const market = createRelicRushArtifactMarket(signer, relicRushMarketAddress);
 
-      // Approve market to transfer the token
+      // Approve
       const approveTx = await market.approve(relicRushMarketAddress, item.chainTokenId);
       await approveTx.wait();
 
-      const startMs = performance.now();
+      // List
       const tx = await market.createListing(item.chainTokenId, priceWei);
       const receipt = await tx.wait();
-      const confirmMs = Math.round(performance.now() - startMs);
+      const ms = Date.now() - t0;
 
-      recordTxAction(`List ${item.name}`, receipt.hash, confirmMs);
-
-      // Sync off-chain listing too
-      await handleCreateListing(item);
-      setStatus(`${item.name} listed for ${monInput} MON on Monad in ${confirmMs}ms.`);
+      if (receipt) {
+        addToast(`${item.name} listed successfully!`, "success", receipt.hash);
+        pushChainAction({
+          label: `List · ${item.name}`,
+          txHash: receipt.hash,
+          ms,
+          at: new Date()
+        });
+        
+        await handleCreateListing(item);
+      }
     } catch (error: any) {
-      const reason = error?.reason || error?.message || "Listing failed.";
-      setStatus(`On-chain listing failed: ${reason}. Falling back to off-chain listing.`);
-      await handleCreateListing(item);
+      console.error("List failed:", error);
+      addToast(error.reason || error.message || "Listing failed.", "error");
     } finally {
       setTxPending(false);
     }
@@ -716,28 +762,40 @@ export function RelicRushApp() {
     if (listing.chainListingId && hasRelicRushMarketAddress()) {
       try {
         setTxPending(true);
-        setStatus(`Buying ${listing.item.name} on Monad…`);
-        const provider = new ethers.BrowserProvider(window.ethereum!);
+        const t0 = Date.now();
+        addToast(`Buying ${listing.item.name} on Monad…`, "pending");
+        
+        const provider = new ethers.BrowserProvider(window.ethereum as any);
         const signer = await provider.getSigner();
         const market = createRelicRushArtifactMarket(signer, relicRushMarketAddress);
 
-        const startMs = performance.now();
         const tx = await market.buyListing(listing.chainListingId, { value: listing.priceWei });
         const receipt = await tx.wait();
-        const confirmMs = Math.round(performance.now() - startMs);
+        const ms = Date.now() - t0;
 
-        recordTxAction(`Buy ${listing.item.name}`, receipt.hash, confirmMs);
-        setStatus(`Purchased ${listing.item.name} on-chain in ${confirmMs}ms!`);
+        if (receipt) {
+          addToast(`Purchased ${listing.item.name}!`, "success", receipt.hash);
+          pushChainAction({
+            label: `Buy · ${listing.item.name}`,
+            txHash: receipt.hash,
+            ms,
+            at: new Date()
+          });
+          
+          const snapshot = await fetchProfile(profile.playerId);
+          setProfile(snapshot.profile);
+          setListings(snapshot.listings);
+          setPurchaseHistory(snapshot.purchaseHistory);
+        }
       } catch (error: any) {
-        const reason = error?.reason || error?.message || "On-chain purchase failed.";
-        setStatus(`On-chain buy failed: ${reason}. Processing off-chain.`);
+        console.error("Buy failed:", error);
+        addToast(error.reason || error.message || "Purchase failed.", "error");
       } finally {
         setTxPending(false);
       }
+    } else {
+      await handleBuyListing(listing);
     }
-
-    // Always sync off-chain
-    await handleBuyListing(listing);
   }
 
   async function handleRecordRunOnChain(summary: DungeonRunSummary) {
@@ -745,21 +803,31 @@ export function RelicRushApp() {
 
     try {
       setTxPending(true);
-      setStatus("Recording run on Monad…");
-      const provider = new ethers.BrowserProvider(window.ethereum!);
+      const t0 = Date.now();
+      addToast("Recording run on Monad…", "pending");
+      
+      const provider = new ethers.BrowserProvider(window.ethereum as any);
       const signer = await provider.getSigner();
       const ledger = createRelicRushRunLedger(signer, relicRushLedgerAddress);
 
       const score = summary.enemiesDefeated * 50 + summary.lootCollected * 25;
-      const startMs = performance.now();
       const tx = await ledger.recordRun(1, score);
       const receipt = await tx.wait();
-      const confirmMs = Math.round(performance.now() - startMs);
+      const ms = Date.now() - t0;
 
-      recordTxAction("Record Run", receipt.hash, confirmMs);
-      setStatus(`Run recorded on Monad in ${confirmMs}ms. Score: ${score}.`);
+      if (receipt) {
+        addToast("Run recorded on-chain!", "success", receipt.hash);
+        pushChainAction({
+          label: "Record Run",
+          txHash: receipt.hash,
+          ms,
+          at: new Date()
+        });
+        void fetchOnChainBestScore();
+      }
     } catch (error: any) {
-      setStatus(`Run recording skipped: ${error?.reason || error?.message || "Ledger unavailable."}`);
+      console.error("Ledger record failed:", error);
+      addToast("Failed to record run on-chain.", "error");
     } finally {
       setTxPending(false);
     }
@@ -768,37 +836,51 @@ export function RelicRushApp() {
   async function handleForgeRelic() {
     if (!requireWalletReady() || !profile) return;
     if (!hasRelicRushForgeAddress()) {
-      setStatus("Set NEXT_PUBLIC_RELIC_RUSH_FORGE_ADDRESS to enable forging.");
+      addToast("Set NEXT_PUBLIC_RELIC_RUSH_FORGE_ADDRESS to enable forging.", "error");
       return;
     }
 
     try {
       setTxPending(true);
-      setStatus("Forging a relic on Monad…");
-      const provider = new ethers.BrowserProvider(window.ethereum!);
+      const t0 = Date.now();
+      addToast("Igniting the Relic Forge…", "pending");
+      
+      const provider = new ethers.BrowserProvider(window.ethereum as any);
       const signer = await provider.getSigner();
       const forge = createRelicRushRelicForge(signer);
 
       const forgeFee = await forge.forgeFee();
       const artifactId = `forge-${createId("relic")}`;
       const forgedItem = buildItemInstance("starforged-idol", "loot", Math.random() < 0.3 ? "epic" : "rare");
-      const tokenURI = `data:application/json,${encodeURIComponent(JSON.stringify({ name: forgedItem.name, description: forgedItem.description, icon: forgedItem.icon, rarity: forgedItem.rarity }))}`;
+      const tokenURI = JSON.stringify({ 
+        name: forgedItem.name, 
+        description: forgedItem.description, 
+        icon: forgedItem.icon, 
+        rarity: forgedItem.rarity 
+      });
 
-      const startMs = performance.now();
       const tx = await forge.forgeRandomRelic(artifactId, tokenURI, { value: forgeFee });
       const receipt = await tx.wait();
-      const confirmMs = Math.round(performance.now() - startMs);
+      const ms = Date.now() - t0;
 
-      recordTxAction(`Forge ${forgedItem.name}`, receipt.hash, confirmMs);
+      if (receipt) {
+        addToast(`${forgedItem.name} forged!`, "success", receipt.hash);
+        pushChainAction({
+          label: `Forge · ${forgedItem.name}`,
+          txHash: receipt.hash,
+          ms,
+          at: new Date()
+        });
 
-      const nextProfile: PlayerProfile = {
-        ...profile,
-        inventory: [{ ...forgedItem, chainTokenId: receipt.hash }, ...profile.inventory],
-      };
-      void persistProfile(nextProfile, `Forged ${forgedItem.name} on Monad in ${confirmMs}ms!`);
+        const nextProfile: PlayerProfile = {
+          ...profile,
+          inventory: [{ ...forgedItem, chainTokenId: receipt.hash }, ...profile.inventory],
+        };
+        void persistProfile(nextProfile, `Forged ${forgedItem.name} on Monad!`);
+      }
     } catch (error: any) {
-      const reason = error?.reason || error?.message || "Forge failed.";
-      setStatus(`Forge failed: ${reason}`);
+      console.error("Forge failed:", error);
+      addToast(error.reason || error.message || "Forge failed.", "error");
     } finally {
       setTxPending(false);
     }
@@ -1084,6 +1166,10 @@ export function RelicRushApp() {
                           </p>
                           {profile.runs[0] ? (
                             <div className="mt-4 space-y-3 text-sm text-slate-300">
+                              <div className="flex justify-between text-cyan-400">
+                                <span>On-Chain Best:</span>
+                                <span>{onChainBestScore !== null ? onChainBestScore : "—"}</span>
+                              </div>
                               <p>{profile.runs[0].notes}</p>
                               <p>Enemies defeated: {profile.runs[0].enemiesDefeated}</p>
                               <p>Loot collected: {profile.runs[0].lootCollected}</p>
@@ -1475,19 +1561,19 @@ export function RelicRushApp() {
                         <div className="mt-3 space-y-2">
                           {txActions.map((action) => (
                             <div
-                              key={action.id}
+                              key={action.at.getTime()}
                               className="rounded-2xl border border-lime-400/15 bg-lime-400/5 p-3"
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <p className="text-sm font-medium text-white">{action.label}</p>
                                 <span className="rounded-full border border-lime-400/25 bg-lime-400/10 px-2 py-0.5 text-[11px] text-lime-200">
-                                  {action.confirmationMs}ms
+                                  {action.ms}ms
                                 </span>
                               </div>
                               <p className="mt-1 text-xs text-slate-400">
                                 Tx: {shortenAddress(action.txHash)}
-                                {action.explorerUrl ? (
-                                  <> · <a href={action.explorerUrl} target="_blank" rel="noopener noreferrer" className="text-cyan-300 underline">View on Explorer</a></>
+                                {hasMonadExplorerUrl() ? (
+                                  <> · <a href={explorerTxUrl(action.txHash)} target="_blank" rel="noopener noreferrer" className="text-cyan-300 underline">View on Explorer</a></>
                                 ) : null}
                               </p>
                             </div>
@@ -1619,6 +1705,44 @@ export function RelicRushApp() {
             </div>
           </>
         )}
+      </div>
+      {/* Toasts overlay */}
+      <div className="pointer-events-none fixed bottom-6 right-6 z-50 flex flex-col gap-3">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto flex items-center gap-4 rounded-2xl border p-4 shadow-2xl backdrop-blur-md transition-all duration-300 ${
+              toast.type === "pending"
+                ? "border-cyan-400/30 bg-black/60 text-cyan-100"
+                : toast.type === "success"
+                  ? "border-lime-400/30 bg-black/60 text-lime-100"
+                  : "border-rose-400/30 bg-black/60 text-rose-100"
+            }`}
+          >
+            <div className="flex-1 text-sm font-medium">
+              {toast.type === "pending" && "⏳ "}
+              {toast.type === "success" && "✅ "}
+              {toast.type === "error" && "❌ "}
+              {toast.message}
+            </div>
+            {toast.txHash && hasMonadExplorerUrl() && (
+              <a
+                href={getMonadExplorerTxUrl(toast.txHash)}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-lg bg-white/10 px-2 py-1 text-[10px] uppercase tracking-wider text-white transition hover:bg-white/20"
+              >
+                View Tx
+              </a>
+            )}
+            <button
+              onClick={() => setToasts((current) => current.filter((t) => t.id !== toast.id))}
+              className="ml-2 text-white/40 hover:text-white"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
       </div>
     </main>
   );
